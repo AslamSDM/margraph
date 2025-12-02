@@ -1,0 +1,464 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Margraf: Financial Knowledge Graph</title>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: #1e1e1e;
+            color: #e0e0e0;
+            overflow: hidden;
+        }
+
+        #header {
+            padding: 12px 20px;
+            background: #252525;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid #3a3a3a;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+        }
+
+        #header h2 {
+            font-size: 18px;
+            font-weight: 600;
+            color: #ffffff;
+        }
+
+        #status {
+            font-size: 12px;
+            padding: 4px 12px;
+            border-radius: 12px;
+            background: #333;
+        }
+
+        #status.connected {
+            background: #1e4d2b;
+            color: #4ade80;
+        }
+
+        #status.disconnected {
+            background: #4d1e1e;
+            color: #f87171;
+        }
+
+        #graph-container {
+            width: 100vw;
+            height: calc(80vh - 48px);
+            position: relative;
+            background: #1e1e1e;
+        }
+
+        #graph {
+            width: 100%;
+            height: 100%;
+        }
+
+        .node {
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .node circle {
+            stroke: #555;
+            stroke-width: 2px;
+            transition: all 0.2s ease;
+        }
+
+        .node:hover circle {
+            stroke: #fff;
+            stroke-width: 3px;
+        }
+
+        .node text {
+            font-size: 11px;
+            font-weight: 500;
+            pointer-events: none;
+            text-shadow: 0 1px 4px rgba(0,0,0,0.8);
+        }
+
+        .link {
+            stroke-opacity: 0.6;
+            transition: all 0.2s ease;
+        }
+
+        .link:hover {
+            stroke-opacity: 1;
+            stroke-width: 3px !important;
+        }
+
+        .link-label {
+            font-size: 9px;
+            fill: #999;
+            pointer-events: none;
+            text-shadow: 0 1px 3px rgba(0,0,0,0.9);
+        }
+
+        #logs {
+            height: calc(20vh);
+            overflow-y: auto;
+            padding: 12px;
+            font-family: 'Courier New', monospace;
+            font-size: 11px;
+            background: #0a0a0a;
+            border-top: 1px solid #3a3a3a;
+        }
+
+        #logs::-webkit-scrollbar {
+            width: 8px;
+        }
+
+        #logs::-webkit-scrollbar-track {
+            background: #1a1a1a;
+        }
+
+        #logs::-webkit-scrollbar-thumb {
+            background: #444;
+            border-radius: 4px;
+        }
+
+        .log-entry {
+            margin-bottom: 6px;
+            padding-bottom: 6px;
+            border-bottom: 1px solid #252525;
+            line-height: 1.5;
+        }
+
+        .log-type {
+            font-weight: bold;
+            margin-right: 8px;
+        }
+
+        .log-sys { color: #4ade80; }
+        .log-news { color: #fbbf24; }
+        .log-social { color: #60a5fa; }
+        .log-market { color: #f87171; }
+        .log-info { color: #a78bfa; }
+
+        #stats {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background: rgba(0,0,0,0.7);
+            padding: 10px 15px;
+            border-radius: 8px;
+            font-size: 11px;
+            backdrop-filter: blur(10px);
+            border: 1px solid #3a3a3a;
+        }
+
+        #stats div {
+            margin-bottom: 4px;
+        }
+
+        .legend {
+            position: absolute;
+            bottom: 10px;
+            left: 10px;
+            background: rgba(0,0,0,0.7);
+            padding: 10px 15px;
+            border-radius: 8px;
+            font-size: 10px;
+            backdrop-filter: blur(10px);
+            border: 1px solid #3a3a3a;
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            margin-bottom: 6px;
+        }
+
+        .legend-color {
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
+            margin-right: 8px;
+            border: 2px solid #555;
+        }
+
+        .tooltip {
+            position: absolute;
+            background: rgba(0,0,0,0.9);
+            color: #fff;
+            padding: 8px 12px;
+            border-radius: 6px;
+            font-size: 11px;
+            pointer-events: none;
+            opacity: 0;
+            transition: opacity 0.2s;
+            border: 1px solid #555;
+            max-width: 250px;
+        }
+    </style>
+</head>
+<body>
+    <div id="header">
+        <h2>Margraf Live - Financial Knowledge Graph</h2>
+        <div id="status">Connecting...</div>
+    </div>
+
+    <div id="graph-container">
+        <svg id="graph"></svg>
+        <div id="stats">
+            <div><strong>Graph Statistics</strong></div>
+            <div>Nodes: <span id="node-count">0</span></div>
+            <div>Edges: <span id="edge-count">0</span></div>
+            <div>Last Update: <span id="last-update">-</span></div>
+        </div>
+        <div class="legend">
+            <div><strong>Node Types</strong></div>
+            <div class="legend-item"><div class="legend-color" style="background: #60a5fa;"></div>Nation</div>
+            <div class="legend-item"><div class="legend-color" style="background: #f87171;"></div>Corporation</div>
+            <div class="legend-item"><div class="legend-color" style="background: #4ade80;"></div>Raw Material</div>
+            <div class="legend-item"><div class="legend-color" style="background: #fbbf24;"></div>Industry</div>
+            <div class="legend-item"><div class="legend-color" style="background: #a78bfa;"></div>Product</div>
+        </div>
+        <div class="tooltip" id="tooltip"></div>
+    </div>
+
+    <div id="logs"></div>
+
+    <script>
+        // WebSocket connection
+        const ws = new WebSocket("ws://" + window.location.host + "/ws");
+        const logDiv = document.getElementById("logs");
+        const statusDiv = document.getElementById("status");
+        const tooltip = document.getElementById("tooltip");
+
+        // Graph dimensions
+        const width = window.innerWidth;
+        const height = window.innerHeight * 0.8 - 48;
+
+        // SVG setup
+        const svg = d3.select("#graph")
+            .attr("width", width)
+            .attr("height", height)
+            .attr("viewBox", [0, 0, width, height]);
+
+        // Add zoom behavior
+        const g = svg.append("g");
+
+        const zoom = d3.zoom()
+            .scaleExtent([0.1, 4])
+            .on("zoom", (event) => {
+                g.attr("transform", event.transform);
+            });
+
+        svg.call(zoom);
+
+        // Color scale for node types
+        const nodeColors = {
+            "Nation": "#60a5fa",
+            "Corporation": "#f87171",
+            "RawMaterial": "#4ade80",
+            "Industry": "#fbbf24",
+            "Product": "#a78bfa",
+            "Crop": "#fb923c"
+        };
+
+        // Link color based on status
+        const linkColors = {
+            "Strong": "#4ade80",
+            "Active": "#60a5fa",
+            "Weak": "#fbbf24",
+            "Blocked": "#f87171"
+        };
+
+        // Force simulation
+        const simulation = d3.forceSimulation()
+            .force("link", d3.forceLink().id(d => d.id).distance(150))
+            .force("charge", d3.forceManyBody().strength(-400))
+            .force("center", d3.forceCenter(width / 2, height / 2))
+            .force("collision", d3.forceCollide().radius(30));
+
+        let link, linkLabel, node, nodeLabel;
+
+        // WebSocket handlers
+        ws.onopen = () => {
+            statusDiv.textContent = "Connected";
+            statusDiv.className = "connected";
+            addLog("sys", "Connected to Margraf Stream");
+        };
+
+        ws.onclose = () => {
+            statusDiv.textContent = "Disconnected";
+            statusDiv.className = "disconnected";
+            addLog("sys", "Connection lost");
+        };
+
+        ws.onmessage = (event) => {
+            const msg = JSON.parse(event.data);
+
+            if (msg.type === "graph_update") {
+                updateGraph(JSON.parse(msg.payload));
+            } else if (msg.type === "system") {
+                addLog("sys", msg.payload);
+            } else if (msg.type === "news_alert") {
+                addLog("news", "📰 " + msg.payload);
+            } else if (msg.type === "social_pulse") {
+                const p = msg.payload;
+                addLog("social", `🌐 ${p.platform}: ${p.user} (Sentiment: ${p.sentiment.toFixed(2)})`);
+            } else if (msg.type === "market_update") {
+                const p = msg.payload;
+                addLog("market", `📈 ${p.id}: $${p.price.toFixed(2)} ${p.currency} (Health: ${p.health.toFixed(2)})`);
+            } else {
+                addLog("info", JSON.stringify(msg));
+            }
+        };
+
+        function updateGraph(data) {
+            // Update statistics
+            document.getElementById("node-count").textContent = data.nodes.length;
+            document.getElementById("edge-count").textContent = data.links.length;
+            document.getElementById("last-update").textContent = new Date().toLocaleTimeString();
+
+            // Remove old elements
+            g.selectAll(".link").remove();
+            g.selectAll(".link-label").remove();
+            g.selectAll(".node").remove();
+
+            // Create links
+            link = g.append("g")
+                .selectAll(".link")
+                .data(data.links)
+                .join("line")
+                .attr("class", "link")
+                .attr("stroke", d => linkColors[d.status] || "#666")
+                .attr("stroke-width", d => Math.max(1, d.weight * 3));
+
+            // Create link labels
+            linkLabel = g.append("g")
+                .selectAll(".link-label")
+                .data(data.links)
+                .join("text")
+                .attr("class", "link-label")
+                .text(d => `${d.type} (${d.weight.toFixed(2)})`);
+
+            // Create nodes
+            const nodeGroup = g.append("g")
+                .selectAll(".node")
+                .data(data.nodes)
+                .join("g")
+                .attr("class", "node")
+                .call(drag(simulation));
+
+            nodeGroup.append("circle")
+                .attr("r", d => {
+                    const baseRadius = 12;
+                    return baseRadius * d.health;
+                })
+                .attr("fill", d => nodeColors[d.type] || "#999")
+                .attr("opacity", 0.9);
+
+            nodeGroup.append("text")
+                .attr("dx", 15)
+                .attr("dy", 4)
+                .text(d => d.name)
+                .attr("fill", "#e0e0e0");
+
+            // Tooltip handlers
+            nodeGroup.on("mouseenter", (event, d) => {
+                const tooltipHTML = `
+                    <strong>${d.name}</strong><br>
+                    Type: ${d.type}<br>
+                    Health: ${d.health.toFixed(2)}<br>
+                    ${d.price ? `Price: $${d.price.toFixed(2)}<br>` : ''}
+                    ${d.ticker ? `Ticker: ${d.ticker}` : ''}
+                `;
+                tooltip.innerHTML = tooltipHTML;
+                tooltip.style.opacity = 1;
+                tooltip.style.left = (event.pageX + 10) + "px";
+                tooltip.style.top = (event.pageY - 10) + "px";
+            });
+
+            nodeGroup.on("mousemove", (event) => {
+                tooltip.style.left = (event.pageX + 10) + "px";
+                tooltip.style.top = (event.pageY - 10) + "px";
+            });
+
+            nodeGroup.on("mouseleave", () => {
+                tooltip.style.opacity = 0;
+            });
+
+            node = nodeGroup;
+
+            // Update simulation
+            simulation.nodes(data.nodes);
+            simulation.force("link").links(data.links);
+            simulation.alpha(0.3).restart();
+
+            simulation.on("tick", () => {
+                link
+                    .attr("x1", d => d.source.x)
+                    .attr("y1", d => d.source.y)
+                    .attr("x2", d => d.target.x)
+                    .attr("y2", d => d.target.y);
+
+                linkLabel
+                    .attr("x", d => (d.source.x + d.target.x) / 2)
+                    .attr("y", d => (d.source.y + d.target.y) / 2);
+
+                node
+                    .attr("transform", d => `translate(${d.x},${d.y})`);
+            });
+        }
+
+        function drag(simulation) {
+            function dragstarted(event) {
+                if (!event.active) simulation.alphaTarget(0.3).restart();
+                event.subject.fx = event.subject.x;
+                event.subject.fy = event.subject.y;
+            }
+
+            function dragged(event) {
+                event.subject.fx = event.x;
+                event.subject.fy = event.y;
+            }
+
+            function dragended(event) {
+                if (!event.active) simulation.alphaTarget(0);
+                event.subject.fx = null;
+                event.subject.fy = null;
+            }
+
+            return d3.drag()
+                .on("start", dragstarted)
+                .on("drag", dragged)
+                .on("end", dragended);
+        }
+
+        function addLog(type, text) {
+            const div = document.createElement("div");
+            div.className = "log-entry";
+            const timestamp = new Date().toLocaleTimeString();
+            div.innerHTML = `<span class="log-type log-${type}">[${type.toUpperCase()}]</span> <span style="color:#666">${timestamp}</span> ${text}`;
+            logDiv.insertBefore(div, logDiv.firstChild);
+
+            // Keep only last 100 logs
+            while (logDiv.children.length > 100) {
+                logDiv.removeChild(logDiv.lastChild);
+            }
+        }
+
+        // Handle window resize
+        window.addEventListener("resize", () => {
+            const newWidth = window.innerWidth;
+            const newHeight = window.innerHeight * 0.8 - 48;
+            svg.attr("width", newWidth).attr("height", newHeight);
+            simulation.force("center", d3.forceCenter(newWidth / 2, newHeight / 2));
+            simulation.alpha(0.3).restart();
+        });
+    </script>
+</body>
+</html>
