@@ -29,6 +29,10 @@ type Config struct {
 	Server struct {
 		Port string `yaml:"port"`
 	} `yaml:"server"`
+	Logging struct {
+		Level        string `yaml:"level"`
+		EnableColors bool   `yaml:"enable_colors"`
+	} `yaml:"logging"`
 }
 
 var Global Config
