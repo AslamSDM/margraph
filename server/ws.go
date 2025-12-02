@@ -1,8 +1,7 @@
 package server
 
 import (
-	"fmt"
-	"log"
+	"margraf/logger"
 	"net/http"
 	"sync"
 
@@ -39,7 +38,7 @@ func (h *Hub) Run() {
 		for client := range h.clients {
 			err := client.WriteJSON(msg)
 			if err != nil {
-				log.Printf("WS Error: %v", err)
+				logger.Warn(logger.StatusWarn, "WS Error: %v", err)
 				client.Close()
 				delete(h.clients, client)
 			}
@@ -58,7 +57,7 @@ func (h *Hub) Broadcast(msgType string, payload interface{}) {
 func (h *Hub) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
-		log.Printf("Upgrade error: %v", err)
+		logger.Warn(logger.StatusWarn, "Upgrade error: %v", err)
 		return
 	}
 
@@ -74,12 +73,12 @@ func StartServer(h *Hub, port string) {
 	http.HandleFunc("/ws", h.HandleWebSocket)
 	http.Handle("/", http.FileServer(http.Dir("./public")))
 
-	fmt.Printf("🌐 WebSocket Server started on ws://localhost%s/ws\n", port)
-	fmt.Printf("🌍 Web Dashboard available at http://localhost%s\n", port)
-	
+	logger.Info(logger.StatusGlob, "WebSocket Server started on ws://localhost%s/ws", port)
+	logger.Info(logger.StatusGlob, "Web Dashboard available at http://localhost%s", port)
+
 	go func() {
 		if err := http.ListenAndServe(port, nil); err != nil {
-			log.Fatal("ListenAndServe: ", err)
+			logger.Error(logger.StatusErr, "ListenAndServe: %v", err)
 		}
 	}()
 }

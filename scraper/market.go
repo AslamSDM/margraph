@@ -2,6 +2,7 @@ package scraper
 
 import (
 	"fmt"
+	"margraf/logger"
 	"net/http"
 	"strings"
 
@@ -24,7 +25,7 @@ func NewMarketScraper() *MarketScraper {
 // but tries to fetch real data first.
 func (s *MarketScraper) FetchTopNations(limit int) ([]string, error) {
 	url := "https://en.wikipedia.org/wiki/List_of_countries_by_GDP_(nominal)"
-	fmt.Printf("  🌍 Scraping real economic data from: %s\n", url)
+	logger.InfoDepth(1, logger.StatusGlob, "Scraping real economic data from: %s", url)
 
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
@@ -90,8 +91,8 @@ func (s *MarketScraper) FetchMajorCompanies(country string) ([]string, error) {
 		url = "https://en.wikipedia.org/wiki/List_of_largest_companies_in_the_United_States_by_revenue"
 	}
 
-	fmt.Printf("  🏢 Scraping company data from: %s\n", url)
-	
+	logger.InfoDepth(1, logger.StatusCor, "Scraping company data from: %s", url)
+
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return nil, err

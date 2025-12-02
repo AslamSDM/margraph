@@ -3,6 +3,7 @@ package simulation
 import (
 	"fmt"
 	"margraf/graph"
+	"margraf/logger"
 )
 
 // Simulator handles shock propagation.
@@ -23,7 +24,7 @@ type ShockEvent struct {
 
 // RunShock simulates a shock event using Spreading Activation (Section 5.2).
 func (s *Simulator) RunShock(event ShockEvent) {
-	fmt.Printf("\n⚡ SIMULATING SHOCK: %s on %s (Factor: %.2f)\n", event.Description, event.TargetNodeID, event.ImpactFactor)
+	logger.Info(logger.StatusShock, "SIMULATING SHOCK: %s on %s (Factor: %.2f)", event.Description, event.TargetNodeID, event.ImpactFactor)
 
 	target, ok := s.Graph.GetNode(event.TargetNodeID)
 	if !ok {
@@ -48,13 +49,13 @@ func (s *Simulator) RunShock(event ShockEvent) {
 		effectiveImpact = 1
 	}
 
-	fmt.Printf("  🏥 Node Health: %.2f -> Effective Impact Factor: %.2f\n", target.Health, effectiveImpact)
+	logger.InfoDepth(1, logger.StatusHlth, "Node Health: %.2f -> Effective Impact Factor: %.2f", target.Health, effectiveImpact)
 
 	// Apply damage to the node itself
 	s.Graph.UpdateNodeHealth(event.TargetNodeID, -0.2)
 
 	// Spreading Activation: Propagate impact through the graph
-	fmt.Printf("  Direct Impact on %s:\n", target.Name)
+	logger.InfoDepth(1, "", "Direct Impact on %s:", target.Name)
 
 	// Track propagation across multiple hops
 	activationMap := make(map[string]float64) // nodeID -> activation energy
@@ -78,7 +79,7 @@ func (s *Simulator) RunShock(event ShockEvent) {
 		eventID := fmt.Sprintf("shock_%s_%d", event.TargetNodeID, len(activationMap))
 
 		if err := s.Graph.UpdateEdgeWeight(e.SourceID, e.TargetID, e.Type, sentimentScore, relevanceScore, eventID); err == nil {
-			fmt.Printf("    ✓ %s -> %s: Weight %.2f -> %.2f (-%0.f%%)\n", target.Name, neighbor.Name, originalWeight, newWeight, (1.0-effectiveImpact)*100)
+			logger.SuccessDepth(2, "%s -> %s: Weight %.2f -> %.2f (-%0.f%%)", target.Name, neighbor.Name, originalWeight, newWeight, (1.0-effectiveImpact)*100)
 
 			// Propagate activation energy
 			activationMap[e.TargetID] = (1.0 - effectiveImpact) * e.Weight * 0.7 // 70% pass-through
@@ -95,10 +96,10 @@ func (s *Simulator) RunShock(event ShockEvent) {
 	s.identifyWinners(event.TargetNodeID, &winners)
 
 	if len(winners) > 0 {
-		fmt.Println("\n  💰 WINNERS (Positive Impact):")
+		logger.Info(logger.StatusFin, "WINNERS (Positive Impact):")
 		for _, winnerID := range winners {
 			winner, _ := s.Graph.GetNode(winnerID)
-			fmt.Printf("    ✓ %s (Substitute/Competitor) - Expected demand increase\n", winner.Name)
+			logger.SuccessDepth(2, "%s (Substitute/Competitor) - Expected demand increase", winner.Name)
 
 			// Apply positive health boost
 			s.Graph.UpdateNodeHealth(winnerID, +0.15)
@@ -107,7 +108,7 @@ func (s *Simulator) RunShock(event ShockEvent) {
 
 	// Second-order ripple effects with actual propagation
 	if len(impactedNodeIDs) > 0 {
-		fmt.Println("\n  🌊 Ripple Effects (2nd Order):")
+		logger.InfoDepth(1, logger.StatusRipple, "Ripple Effects (2nd Order):")
 		for _, impactedID := range impactedNodeIDs {
 			impactedNode, _ := s.Graph.GetNode(impactedID)
 			activation := activationMap[impactedID]
@@ -127,7 +128,7 @@ func (s *Simulator) RunShock(event ShockEvent) {
 
 				s.Graph.UpdateEdgeWeight(e.SourceID, e.TargetID, e.Type, sentimentScore, relevanceScore, eventID)
 
-				fmt.Printf("    - %s -> %s: Reduced flow (Activation: %.2f)\n", impactedNode.Name, downstream.Name, activation)
+				logger.InfoDepth(2, "", "%s -> %s: Reduced flow (Activation: %.2f)", impactedNode.Name, downstream.Name, activation)
 
 				// Propagate to third order if significant
 				if activation > 0.15 {
@@ -137,7 +138,7 @@ func (s *Simulator) RunShock(event ShockEvent) {
 		}
 	}
 
-	fmt.Printf("\n  📊 Summary: %d directly impacted, %d winners identified\n", len(impactedNodeIDs), len(winners))
+	logger.InfoDepth(1, logger.StatusData, "Summary: %d directly impacted, %d winners identified", len(impactedNodeIDs), len(winners))
 }
 
 // identifyWinners finds nodes that benefit from the shock (substitutes, competitors).

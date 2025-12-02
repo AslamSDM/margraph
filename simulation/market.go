@@ -1,8 +1,8 @@
 package simulation
 
 import (
-	"fmt"
 	"margraf/graph"
+	"margraf/logger"
 	"margraf/scraper"
 	"margraf/server"
 	"time"
@@ -24,7 +24,7 @@ func NewMarketMonitor(g *graph.Graph, h *server.Hub) *MarketMonitor {
 
 func (m *MarketMonitor) Start(interval time.Duration) {
 	ticker := time.NewTicker(interval)
-	fmt.Printf("📈 Market Monitor active. Checking prices every %v...\n", interval)
+	logger.Info(logger.StatusMon, "Market Monitor active. Checking prices every %v...", interval)
 	
 	for range ticker.C {
 		m.UpdatePrices()
@@ -53,7 +53,7 @@ func (m *MarketMonitor) checkStock(n *graph.Node) {
 		}
 		m.Graph.SetNodeTicker(n.ID, t)
 		ticker = t
-		fmt.Printf("    🏷️ Found Ticker for %s: %s\n", n.Name, t)
+		logger.InfoDepth(2, logger.StatusTag, "Found Ticker for %s: %s", n.Name, t)
 	}
 
 	data, err := m.Scraper.FetchStockData(ticker)
@@ -64,7 +64,7 @@ func (m *MarketMonitor) checkStock(n *graph.Node) {
 
 	// Update Node with thread-safe method
 	if err := m.Graph.UpdateNodePrice(n.ID, data.Price, data.Currency, ""); err != nil {
-		fmt.Printf("    ⚠️ Failed to update price for %s: %v\n", n.Name, err)
+		logger.WarnDepth(2, logger.StatusWarn, "Failed to update price for %s: %v", n.Name, err)
 		return
 	}
 
@@ -73,7 +73,7 @@ func (m *MarketMonitor) checkStock(n *graph.Node) {
 	healthImpact := data.Change * 0.1 // Scale down
 	newHealth, _ := m.Graph.UpdateNodeHealth(n.ID, healthImpact)
 
-	fmt.Printf("    💵 %s (%s): %.2f %s (Change: %.2f%%)\n", n.Name, ticker, data.Price, data.Currency, data.Change*100)
+	logger.InfoDepth(2, logger.StatusFin, "%s (%s): %.2f %s (Change: %.2f%%)", n.Name, ticker, data.Price, data.Currency, data.Change*100)
 
 	// Broadcast update
 	m.Hub.Broadcast("market_update", map[string]interface{}{
