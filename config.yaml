@@ -1,0 +1,22 @@
+app:
+  name: "Margraf FDKG"
+  version: "1.0.0"
+
+scraping:
+  search_depth: 2
+  branching_limit: 5
+  request_timeout: 10
+
+simulation:
+  shock_health_impact: -0.2
+  sentiment_scale: 0.1
+
+news:
+  rss_url: "http://feeds.bbci.co.uk/news/business/rss.xml"
+  poll_interval: 60
+
+market:
+  poll_interval: 30
+
+server:
+  port: ":8080"
