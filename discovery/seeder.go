@@ -7,6 +7,7 @@ import (
 	"margraf/datasources"
 	"margraf/graph"
 	"margraf/llm"
+	"margraf/logger"
 	"margraf/scraper"
 	"strings"
 	"sync"
@@ -34,23 +35,23 @@ func NewSeeder(client *llm.Client) *Seeder {
 }
 
 func (s *Seeder) Seed(g *graph.Graph) error {
-	fmt.Println("🌱 Starting Recursive Graph Discovery (Real Data + AI)...")
+	logger.Info(logger.StatusInit, "Starting Recursive Graph Discovery (Real Data + AI)...")
 
 	if s.Client.ApiKey == "" {
 		return fmt.Errorf("GEMINI_API_KEY is not set. Cannot fetch live data")
 	}
 
 	// 1. Start with major economies via Scraping
-	fmt.Println("  [Root] Fetching Top Global Economies from Wikipedia...")
+	logger.InfoDepth(1, logger.StatusGlob, "[Root] Fetching Top Global Economies from Wikipedia...")
 	nations, err := s.MarketScraper.FetchTopNations(10)
 	if err != nil {
-		fmt.Printf("    ⚠️ Scraping failed (%v). Falling back to LLM...\n", err)
+		logger.WarnDepth(2, logger.StatusWarn, "Scraping failed (%v). Falling back to LLM...", err)
 		nations, err = s.fetchList("List the top 10 major global economies covering all continents. Return ONLY a JSON array of strings.")
 		if err != nil {
 			return fmt.Errorf("failed to fetch nations: %v", err)
 		}
 	} else {
-		fmt.Printf("    ✅ Scraped %d nations successfully.\n", len(nations))
+		logger.SuccessDepth(2, "Scraped %d nations successfully", len(nations))
 	}
 
 	for _, name := range nations {
@@ -71,7 +72,7 @@ func (s *Seeder) Seed(g *graph.Graph) error {
 }
 
 func (s *Seeder) discoverTradeLinks(g *graph.Graph, nations []string) {
-	fmt.Println("🔗 Discovering Major Trade Relationships (UN Comtrade + World Bank)...")
+	logger.Info(logger.StatusLink, "Discovering Major Trade Relationships (UN Comtrade + World Bank)...")
 
 	// Limit to first 5 to avoid N^2 explosion and API rate limits
 	limit := 5
@@ -87,12 +88,12 @@ func (s *Seeder) discoverTradeLinks(g *graph.Graph, nations []string) {
 		// Get country code
 		code1, ok := datasources.GetCountryCode(strings.ToLower(nation1))
 		if !ok {
-			fmt.Printf("  ⚠️ No ISO code for %s, skipping Comtrade lookup\n", nation1)
+			logger.WarnDepth(1, logger.StatusWarn, "No ISO code for %s, skipping Comtrade lookup", nation1)
 			continue
 		}
 
 		// Get economic profile from World Bank
-		fmt.Printf("  📊 Fetching economic data for %s from World Bank...\n", nation1)
+		logger.InfoDepth(1, logger.StatusData, "Fetching economic data for %s from World Bank...", nation1)
 		profile, err := s.WorldBankClient.GetEconomicProfile(code1, year)
 		if err == nil && profile.GDP > 0 {
 			// Store economic data in node attributes
@@ -101,15 +102,15 @@ func (s *Seeder) discoverTradeLinks(g *graph.Graph, nations []string) {
 				node.Attributes["exports"] = profile.Exports
 				node.Attributes["imports"] = profile.Imports
 				node.Attributes["fdi"] = profile.FDI
-				fmt.Printf("    ✓ GDP: $%.2fB, Exports: $%.2fB\n", profile.GDP/1e9, profile.Exports/1e9)
+				logger.SuccessDepth(2, "GDP: $%.2fB, Exports: $%.2fB", profile.GDP/1e9, profile.Exports/1e9)
 			}
 		}
 
 		// Get top exports from Comtrade
-		fmt.Printf("  🌍 Fetching trade data for %s from UN Comtrade...\n", nation1)
+		logger.InfoDepth(1, logger.StatusGlob, "Fetching trade data for %s from UN Comtrade...", nation1)
 		topExports, err := s.ComtradeClient.GetTopExports(code1, year, 5)
 		if err != nil {
-			fmt.Printf("    ⚠️ Comtrade error: %v\n", err)
+			logger.WarnDepth(2, logger.StatusWarn, "Comtrade error: %v", err)
 			continue
 		}
 
@@ -146,7 +147,7 @@ func (s *Seeder) discoverTradeLinks(g *graph.Graph, nations []string) {
 				Weight:   weight,
 			})
 
-			fmt.Printf("    ✅ %s exports %s ($%.2fB, weight=%.2f)\n",
+			logger.SuccessDepth(2, "%s exports %s ($%.2fB, weight=%.2f)",
 				nation1, trade.CommodityDesc, trade.PrimaryValue/1e9, weight)
 		}
 
@@ -197,21 +198,22 @@ func (s *Seeder) discoverTradeLinks(g *graph.Graph, nations []string) {
 					Weight:   weight,
 				})
 
-				fmt.Printf("  ✅ %s -> %s: $%.2fB trade (weight=%.2f)\n", nation1, nation2, totalValue/1e9, weight)
+				logger.SuccessDepth(1, "%s -> %s: $%.2fB trade (weight=%.2f)", nation1, nation2, totalValue/1e9, weight)
 			}
 		}
 	}
 
-	fmt.Println("  ✓ Trade discovery complete with real UN Comtrade + World Bank data")
+	logger.SuccessDepth(1, "Trade discovery complete with real UN Comtrade + World Bank data")
 }
 
 func (s *Seeder) validateRelationship(source, target, product string) (bool, error) {
-	fmt.Printf("    🔍 Validating Trade: %s exports %s to %s...\n", source, product, target)
+	logger.InfoDepth(2, logger.StatusChk, "Validating: %s exports %s to %s", source, product, target)
 	query := fmt.Sprintf("Does %s export %s to %s", source, product, target)
-	
+
 	results, err := s.WebSearcher.Search(query)
 	if err != nil {
-		return true, nil // Fallback to trust if search fails
+		// Silently trust if search fails - no need to warn
+		return true, nil
 	}
 	
 	if len(results) == 0 {
@@ -259,7 +261,7 @@ func (s *Seeder) ProcessNation(g *graph.Graph, name string, depth int) error {
 	// 1. Add Nation Node
 	if valid, _ := s.validateEntity(name, "Nation"); valid {
 		g.AddNode(&graph.Node{ID: id, Type: graph.NodeTypeNation, Name: name})
-		fmt.Printf("[%d] 🏳️  Added Nation: %s\n", depth, name)
+		logger.InfoDepth(depth, logger.StatusNat, "Added Nation: %s", name)
 	} else {
 		return nil // Skip if invalid
 	}
@@ -288,21 +290,23 @@ func (s *Seeder) processIndustry(g *graph.Graph, industryName, nationName string
 	// Add Industry Node
 	g.AddNode(&graph.Node{ID: indID, Type: graph.NodeTypeIndustry, Name: industryName})
 	g.AddEdge(&graph.Edge{SourceID: nationID, TargetID: indID, Type: graph.EdgeTypeHasIndustry, Weight: 1.0})
-	fmt.Printf("    🏭 Added Industry: %s (in %s)\n", industryName, nationName)
+	logger.InfoDepth(2, logger.StatusInd, "Added Industry: %s (in %s)", industryName, nationName)
 
 	// 1. Find Major Companies (RAG: Search + LLM Extraction)
-	fmt.Printf("      🔍 Searching for companies in '%s' (%s)...\n", industryName, nationName)
+	logger.InfoDepth(3, logger.StatusChk, "Finding companies in '%s' (%s)...", industryName, nationName)
 	searchQuery := fmt.Sprintf("Largest %s companies in %s market cap", industryName, nationName)
 	searchResults, err := s.WebSearcher.Search(searchQuery)
-	
+
 	var companies []string
+	searchSucceeded := false
+
 	if err == nil && len(searchResults) > 0 {
 		// Construct context from search results
 		var contextBuilder strings.Builder
 		for _, res := range searchResults {
 			contextBuilder.WriteString(fmt.Sprintf("- %s: %s\n", res.Title, res.Snippet))
 		}
-		
+
 		// RAG Prompt
 		ragPrompt := fmt.Sprintf(`
 Extract the names of the top %d %s companies in %s from the following search results.
@@ -312,11 +316,18 @@ Return ONLY a JSON array of strings, e.g. ["Company A", "Company B"].
 `, config.Global.Scraping.BranchingLimit, industryName, nationName, contextBuilder.String())
 
 		companies, _ = s.fetchList(ragPrompt)
-	} 
+		if len(companies) > 0 {
+			searchSucceeded = true
+			logger.InfoDepth(3, logger.StatusOK, "Found %d companies via web search", len(companies))
+		}
+	}
 
 	// Fallback if search/extraction failed or returned empty
 	if len(companies) == 0 {
-		fmt.Println("      ⚠️ Web search unclear, falling back to LLM knowledge...")
+		// Only log warning if search truly failed, not just for LLM fallback
+		if err != nil && !searchSucceeded {
+			logger.InfoDepth(3, logger.StatusChk, "Using LLM knowledge base for companies...")
+		}
 		cPrompt := fmt.Sprintf("List %d largest companies by market cap in the %s industry in %s. Return ONLY a JSON array of strings.", config.Global.Scraping.BranchingLimit, industryName, nationName)
 		companies, _ = s.fetchList(cPrompt)
 	}
@@ -325,7 +336,7 @@ Return ONLY a JSON array of strings, e.g. ["Company A", "Company B"].
 		compID := cleanID(comp)
 		g.AddNode(&graph.Node{ID: compID, Type: graph.NodeTypeCorporation, Name: comp})
 		g.AddEdge(&graph.Edge{SourceID: indID, TargetID: compID, Type: graph.EdgeTypeHasCompany, Weight: 1.0})
-		fmt.Printf("      🏢 Added Company: %s\n", comp)
+		logger.InfoDepth(3, logger.StatusCor, "Added Company: %s", comp)
 	}
 
 	// 2. Find Raw Materials
@@ -347,7 +358,7 @@ func (s *Seeder) processMaterial(g *graph.Graph, matName, industryNodeID string,
 	// Add Material Node (idempotent check done by AddNode usually, but we might want to ensure it exists)
 	if _, exists := g.GetNode(matID); !exists {
 		g.AddNode(&graph.Node{ID: matID, Type: graph.NodeTypeRawMaterial, Name: matName})
-		fmt.Printf("      💎 Added Material: %s\n", matName)
+		logger.InfoDepth(3, logger.StatusMat, "Added Material: %s", matName)
 	}
 
 	// Link Industry -> Requires -> Material
@@ -368,17 +379,17 @@ func (s *Seeder) processMaterial(g *graph.Graph, matName, industryNodeID string,
 		// Recursively process this nation
 		// We rely on s.visited to stop infinite loops if we've already seen this nation
 		if !s.isVisited(prodID) {
-			fmt.Printf("        🔄 Discovered Producer: %s (Recursing...)\n", producerName)
+			logger.InfoDepth(4, logger.StatusRec, "Discovered Producer: %s (Recursing...)", producerName)
 			if err := s.ProcessNation(g, producerName, depth+1); err != nil {
 				fmt.Printf("Error recursing nation %s: %v\n", producerName, err)
 			}
 		}
-		
+
 		// Link Producer -> Produces -> Material
 		// (Even if nation was already visited, we establish the link)
 		if _, ok := g.GetNode(prodID); ok {
 			g.AddEdge(&graph.Edge{SourceID: prodID, TargetID: matID, Type: graph.EdgeTypeProduces, Weight: 1.0})
-			fmt.Printf("        🔗 Link: %s -> Produces -> %s\n", producerName, matName)
+			logger.InfoDepth(4, logger.StatusLink, "Link: %s -> Produces -> %s", producerName, matName)
 		}
 	}
 
@@ -437,17 +448,17 @@ func (s *Seeder) fetchEdges(prompt string) ([]edgeDTO, error) {
 
 func (s *Seeder) validateEntity(name, category string) (bool, error) {
 	// Real Web Validation
-	fmt.Printf("    🔍 Validating '%s' via Web Search...\n", name)
-	
+	logger.InfoDepth(2, logger.StatusChk, "Validating '%s'...", name)
+
 	query := fmt.Sprintf("%s %s wikipedia", name, category)
 	results, err := s.WebSearcher.Search(query)
 	if err != nil {
-		fmt.Printf("      ⚠️ Search failed: %v. Assuming valid based on source.\n", err)
-		return true, nil // Fallback: if search fails, trust the source (Wikipedia/LLM)
+		// Silently assume valid if search fails
+		return true, nil
 	}
 
 	if len(results) == 0 {
-		fmt.Printf("      ⚠️ No search results found for %s.\n", name)
+		logger.WarnDepth(3, logger.StatusWarn, "No search results found for %s", name)
 		return false, nil
 	}
 
@@ -468,8 +479,8 @@ func (s *Seeder) validateEntity(name, category string) (bool, error) {
 	if hitCount > 0 {
 		return true, nil
 	}
-	
-	fmt.Printf("      ❌ Validation failed. Web results didn't match '%s'.\n", name)
+
+	logger.WarnDepth(3, logger.StatusErr, "Validation failed. Web results didn't match '%s'", name)
 	return false, nil
 }
 

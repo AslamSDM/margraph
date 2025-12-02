@@ -6,10 +6,10 @@ import (
 	"margraf/discovery"
 	"margraf/graph"
 	"margraf/llm"
+	"margraf/logger"
 	"margraf/server"
 	"margraf/simulation"
-	"margraf/social" // We need to add this import, but circular dependency might be an issue if social imports news.
-	// Wait, news imports social. social imports server. server is independent. OK.
+	"margraf/social"
 	"strings"
 	"time"
 )
@@ -39,24 +39,26 @@ func NewEngine(g *graph.Graph, c *llm.Client, s *discovery.Seeder, sim *simulati
 }
 
 type NewsImpact struct {
-	EntityName   string  `json:"entity"`
-	EntityType   string  `json:"type"`
-	ImpactScore  float64 `json:"impact"`
-	Reason       string  `json:"reason"`
-	IsNewEntitiy bool    `json:"is_new"`
+	EntityName      string   `json:"entity"`
+	EntityType      string   `json:"type"`
+	ImpactScore     float64  `json:"impact"`
+	Reason          string   `json:"reason"`
+	IsNewEntitiy    bool     `json:"is_new"`
+	RelatedEntities []string `json:"related_entities,omitempty"`
+	SentimentScore  float64  `json:"sentiment,omitempty"`
 }
 
 func (e *Engine) Monitor(interval time.Duration) {
 	ticker := time.NewTicker(interval)
-	fmt.Printf("📡 News Monitor active. Polling %s every %v...\n", e.FeedURL, interval)
-	
+	logger.Info(logger.StatusNews, "News Monitor active. Polling %s every %v...", e.FeedURL, interval)
+
 	for range ticker.C {
 		e.FetchAndProcess()
 	}
 }
 
 func (e *Engine) FetchAndProcess() {
-	fmt.Println("📡 Checking for news...")
+	logger.Info(logger.StatusNews, "Checking for news...")
 	items, err := FetchRSS(e.FeedURL)
 	if err != nil {
 		fmt.Printf("Error fetching RSS: %v\n", err)
@@ -81,19 +83,24 @@ func (e *Engine) FetchAndProcess() {
 }
 
 func (e *Engine) processItem(item RSSItem) {
-	fmt.Printf("  📰 Analyzing: %s\n", item.Title)
+	logger.InfoDepth(1, logger.StatusNews, "Analyzing: %s", item.Title)
 	e.Hub.Broadcast("news_alert", item.Title)
 	
 	prompt := fmt.Sprintf(`
 Analyze this financial news headline: "%s"
-Identify the MAIN entity involved (Nation, Corporation, or RawMaterial).
-Determine the economic impact score (-1.0 for catastrophic, 0.0 for neutral, 1.0 for boom).
-Return ONLY a JSON object: {"entity": "EntityName", "type": "Nation", "impact": -0.5, "reason": "Brief reason"}
+Identify:
+1. The MAIN entity involved (Nation, Corporation, or RawMaterial)
+2. The economic impact score (-1.0 for catastrophic, 0.0 for neutral, 1.0 for boom)
+3. Any related entities mentioned (up to 3 other companies, nations, or commodities)
+4. The overall sentiment score (-1.0 to 1.0)
+
+Return ONLY a JSON object with this exact format:
+{"entity": "EntityName", "type": "Nation", "impact": -0.5, "reason": "Brief reason", "related_entities": ["Entity1", "Entity2"], "sentiment": 0.5}
 `, item.Title)
 
 	resp, err := e.Client.Complete(prompt)
 	if err != nil {
-		fmt.Printf("    ❌ LLM Error: %v\n", err)
+		logger.ErrorDepth(2, logger.StatusErr, "LLM Error: %v", err)
 		return
 	}
 
@@ -110,7 +117,7 @@ Return ONLY a JSON object: {"entity": "EntityName", "type": "Nation", "impact": 
 	node, exists := e.Graph.GetNode(id)
 
 	if !exists {
-		fmt.Printf("    🆕 New Entity Discovered in News: %s. Triggering Recursive Seeder...\n", impact.EntityName)
+		logger.InfoDepth(2, logger.StatusNew, "New Entity Discovered in News: %s. Triggering Recursive Seeder...", impact.EntityName)
 		e.Hub.Broadcast("graph_update", fmt.Sprintf("New Node: %s", impact.EntityName))
 
 		var nodeType graph.NodeType
@@ -130,15 +137,15 @@ Return ONLY a JSON object: {"entity": "EntityName", "type": "Nation", "impact": 
 
 		if nodeType == graph.NodeTypeNation {
 			go func(name string) {
-				fmt.Printf("    🔍 Expanding Knowledge Graph for new nation: %s...\n", name)
+				logger.InfoDepth(2, logger.StatusChk, "Expanding Knowledge Graph for new nation: %s...", name)
 				if err := e.Seeder.ProcessNation(e.Graph, name, 0); err != nil {
-					fmt.Printf("    ⚠️ Failed to expand nation %s: %v\n", name, err)
+					logger.WarnDepth(2, logger.StatusWarn, "Failed to expand nation %s: %v", name, err)
 				}
 			}(impact.EntityName)
 		}
-		
+
 	} else {
-		fmt.Printf("    ✅ Entity Found: %s\n", node.Name)
+		logger.SuccessDepth(2, "Entity Found: %s", node.Name)
 	}
 
 	if impact.ImpactScore != 0 {
@@ -149,6 +156,87 @@ Return ONLY a JSON object: {"entity": "EntityName", "type": "Nation", "impact": 
 		}
 		e.Simulator.RunShock(evt)
 		e.Hub.Broadcast("shock_event", evt)
+	}
+
+	// Update edge weights based on news sentiment
+	e.updateEdgeWeightsFromNews(id, impact, item.Title)
+}
+
+// updateEdgeWeightsFromNews updates weights of edges connected to the affected entity
+func (e *Engine) updateEdgeWeightsFromNews(entityID string, impact NewsImpact, newsTitle string) {
+	// Get all outgoing edges from the entity
+	outgoingEdges := e.Graph.GetOutgoingEdges(entityID)
+
+	// Determine relevance score based on news credibility (BBC is high credibility)
+	relevanceScore := 0.8
+
+	// Use sentiment score if provided, otherwise derive from impact
+	sentimentScore := impact.SentimentScore
+	if sentimentScore == 0 && impact.ImpactScore != 0 {
+		sentimentScore = impact.ImpactScore
+	}
+
+	eventID := fmt.Sprintf("news_%d", time.Now().Unix())
+
+	// Update weights for all outgoing edges
+	for _, edge := range outgoingEdges {
+		err := e.Graph.UpdateEdgeWeight(
+			edge.SourceID,
+			edge.TargetID,
+			edge.Type,
+			sentimentScore,
+			relevanceScore,
+			eventID,
+		)
+		if err != nil {
+			logger.WarnDepth(2, logger.StatusWarn, "Failed to update edge weight: %v", err)
+		} else {
+			logger.SuccessDepth(2, "Updated edge %s->%s weight based on news", edge.SourceID, edge.TargetID)
+		}
+	}
+
+	// Also update edges to related entities if they exist
+	for _, relatedEntity := range impact.RelatedEntities {
+		relatedID := cleanID(relatedEntity)
+
+		// Check if this entity exists in the graph
+		if _, exists := e.Graph.GetNode(relatedID); !exists {
+			continue
+		}
+
+		// Try to find edges between the main entity and related entities
+		for _, edge := range e.Graph.GetOutgoingEdges(entityID) {
+			if edge.TargetID == relatedID {
+				err := e.Graph.UpdateEdgeWeight(
+					edge.SourceID,
+					edge.TargetID,
+					edge.Type,
+					sentimentScore * 0.7, // Reduced impact for related entities
+					relevanceScore,
+					eventID,
+				)
+				if err == nil {
+					logger.SuccessDepth(2, "Updated related edge %s->%s", edge.SourceID, edge.TargetID)
+				}
+			}
+		}
+
+		// Also check reverse direction
+		for _, edge := range e.Graph.GetOutgoingEdges(relatedID) {
+			if edge.TargetID == entityID {
+				err := e.Graph.UpdateEdgeWeight(
+					edge.SourceID,
+					edge.TargetID,
+					edge.Type,
+					sentimentScore * 0.7,
+					relevanceScore,
+					eventID,
+				)
+				if err == nil {
+					logger.SuccessDepth(2, "Updated related edge %s->%s", edge.SourceID, edge.TargetID)
+				}
+			}
+		}
 	}
 }
 

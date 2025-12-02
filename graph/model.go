@@ -3,6 +3,7 @@ package graph
 import (
 	"encoding/json"
 	"fmt"
+	"margraf/logger"
 	"os"
 	"sync"
 	"time"
@@ -107,7 +108,7 @@ func (g *Graph) EnableAutoSave(path string, threshold int) {
 	defer g.mu.Unlock()
 	g.autoSavePath = path
 	g.autoSaveThreshold = threshold
-	fmt.Printf("📁 Auto-save enabled: %s (every %d changes)\n", path, threshold)
+	logger.Info(logger.StatusSave, "Auto-save enabled: %s (every %d changes)", path, threshold)
 }
 
 // triggerAutoSave saves the graph if threshold is reached (must be called with lock held)
@@ -119,9 +120,9 @@ func (g *Graph) triggerAutoSave() {
 		g.mu.Unlock()
 
 		if err := g.Save(g.autoSavePath); err != nil {
-			fmt.Printf("⚠️ Auto-save failed: %v\n", err)
+			logger.Warn(logger.StatusWarn, "Auto-save failed: %v", err)
 		} else {
-			fmt.Printf("💾 Auto-saved graph to %s (%d nodes, %d edges)\n", g.autoSavePath, len(g.Nodes), len(g.Edges))
+			logger.Info(logger.StatusSave, "Auto-saved graph to %s (%d nodes, %d edges)", g.autoSavePath, len(g.Nodes), len(g.Edges))
 		}
 
 		g.mu.Lock()
@@ -461,4 +462,74 @@ func (g *Graph) Replace(other *Graph) {
 	for _, e := range other.Edges {
 		g.Adjacency[e.SourceID] = append(g.Adjacency[e.SourceID], e)
 	}
+}
+
+// ApplyTemporalDecay applies time-based decay to all edges in the graph
+// This simulates the natural weakening of relationships over time without new events
+func (g *Graph) ApplyTemporalDecay(lambda float64) int {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	updatedCount := 0
+	now := time.Now()
+
+	for _, edge := range g.Edges {
+		// Calculate time since last update (in days)
+		timeSinceUpdate := now.Sub(edge.Timestamp).Hours() / 24.0
+
+		// Skip if updated very recently (less than 1 hour)
+		if timeSinceUpdate < 1.0/24.0 {
+			continue
+		}
+
+		// Apply decay: W_new = W_old * e^(-λ * t)
+		exponent := -lambda * timeSinceUpdate
+		decayFactor := expApprox(exponent)
+
+		previousWeight := edge.Weight
+		newWeight := previousWeight * decayFactor
+
+		// Clamp to minimum threshold
+		if newWeight < 0.01 {
+			newWeight = 0.01
+		}
+
+		// Only update if there's a meaningful change
+		if previousWeight-newWeight > 0.001 {
+			edge.Weight = newWeight
+			edge.Timestamp = now
+
+			// Update status based on weight
+			if newWeight < 0.1 {
+				edge.Status = "Blocked"
+			} else if newWeight < 0.3 {
+				edge.Status = "Weak"
+			} else if newWeight < 0.7 {
+				edge.Status = "Active"
+			} else {
+				edge.Status = "Strong"
+			}
+
+			// Record in history
+			g.recordEdgeHistory(edge, "temporal_decay")
+			updatedCount++
+		}
+	}
+
+	return updatedCount
+}
+
+// StartTemporalDecayWorker starts a background goroutine that periodically applies decay
+func (g *Graph) StartTemporalDecayWorker(interval time.Duration, lambda float64) {
+	go func() {
+		ticker := time.NewTicker(interval)
+		for range ticker.C {
+			count := g.ApplyTemporalDecay(lambda)
+			if count > 0 {
+				// Use a simple print to avoid circular imports with logger
+				// In production, you might want to use a callback or channel
+				fmt.Printf("[DECAY] Updated %d edges with temporal decay\n", count)
+			}
+		}
+	}()
 }

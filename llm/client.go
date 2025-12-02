@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"margraf/logger"
 	"net/http"
 	"os"
 	"strings"
@@ -27,40 +28,66 @@ type Client struct {
 	requestCount    int
 	windowStart     time.Time
 	maxRequestsPerMinute int
+
+	// Fallback Client
+	fallback *Client
 }
 
 func NewClient() *Client {
-	// 1. Try OpenRouter first
+	var primary *Client
+	var fallback *Client
+
+	// 1. Primary: OpenRouter with Grok-4.1-fast
 	if key := os.Getenv("OPENROUTER_API_KEY"); key != "" {
 		model := os.Getenv("OPENROUTER_MODEL")
 		if model == "" {
-			model = "google/gemini-2.0-flash-001" // Default OpenRouter ID
+			model = "x-ai/grok-beta" // Grok-4.1-fast free tier
 		}
-		fmt.Printf("  (LLM Client using OpenRouter model: %s)\n", model)
-		return &Client{
+		logger.Info(logger.StatusOK, "Primary LLM: OpenRouter (%s)", model)
+		primary = &Client{
 			ApiKey:               key,
 			Model:                model,
 			Provider:             "openrouter",
 			BaseURL:              "https://openrouter.ai/api/v1/chat/completions",
-			maxRequestsPerMinute: 60, // Default rate limit
+			maxRequestsPerMinute: 60,
 			windowStart:          time.Now(),
 		}
 	}
 
-	// 2. Fallback to Gemini Direct
-	key := os.Getenv("GEMINI_API_KEY")
-	model := os.Getenv("GEMINI_MODEL")
-	if model == "" {
-		model = "gemini-1.5-flash"
+	// 2. Fallback: Gemini Direct
+	if geminiKey := os.Getenv("GEMINI_API_KEY"); geminiKey != "" {
+		model := os.Getenv("GEMINI_MODEL")
+		if model == "" {
+			model = "gemini-1.5-flash"
+		}
+		logger.Info(logger.StatusOK, "Fallback LLM: Google Gemini (%s)", model)
+		fallback = &Client{
+			ApiKey:               geminiKey,
+			Model:                model,
+			Provider:             "gemini",
+			BaseURL:              "https://generativelanguage.googleapis.com/v1beta/models",
+			maxRequestsPerMinute: 60,
+			windowStart:          time.Now(),
+		}
 	}
-	fmt.Printf("  (LLM Client using Google Gemini model: %s)\n", model)
+
+	// Link fallback to primary
+	if primary != nil {
+		primary.fallback = fallback
+		return primary
+	}
+
+	// If no OpenRouter key, use Gemini as primary
+	if fallback != nil {
+		return fallback
+	}
+
+	// No API keys configured
+	logger.Error(logger.StatusErr, "No API keys configured (OPENROUTER_API_KEY or GEMINI_API_KEY)")
 	return &Client{
-		ApiKey:               key,
-		Model:                model,
-		Provider:             "gemini",
-		BaseURL:              "https://generativelanguage.googleapis.com/v1beta/models",
-		maxRequestsPerMinute: 60, // Gemini free tier: 60 RPM
-		windowStart:          time.Now(),
+		ApiKey: "",
+		Model:  "",
+		Provider: "",
 	}
 }
 
@@ -117,7 +144,7 @@ func (c *Client) checkCircuitBreaker() error {
 	if c.circuitOpen {
 		// Check if cooldown period has passed
 		if time.Since(c.lastFailureTime) > cooldownPeriod {
-			fmt.Println("  🔄 Circuit breaker cooling down, attempting reset...")
+			logger.InfoDepth(1, logger.StatusRec, "Circuit breaker cooling down, attempting reset...")
 			c.circuitOpen = false
 			c.failureCount = 0
 		} else {
@@ -135,14 +162,14 @@ func (c *Client) recordFailure() {
 
 	if c.failureCount >= 5 {
 		c.circuitOpen = true
-		fmt.Printf("  ⚠️ CIRCUIT BREAKER OPENED after %d consecutive failures\n", c.failureCount)
+		logger.WarnDepth(1, logger.StatusWarn, "CIRCUIT BREAKER OPENED after %d consecutive failures", c.failureCount)
 	}
 }
 
 // recordSuccess resets failure counter
 func (c *Client) recordSuccess() {
 	if c.failureCount > 0 {
-		fmt.Println("  ✓ API call succeeded, resetting failure count")
+		logger.InfoDepth(1, logger.StatusOK, "API call succeeded, resetting failure count")
 	}
 	c.failureCount = 0
 	c.circuitOpen = false
@@ -175,11 +202,21 @@ func (c *Client) Complete(prompt string) (string, error) {
 
 	// Check circuit breaker
 	if err := c.checkCircuitBreaker(); err != nil {
+		// If circuit is open and we have a fallback, try fallback
+		if c.fallback != nil {
+			logger.Warn(logger.StatusWarn, "Primary LLM circuit open, using fallback (%s)", c.fallback.Provider)
+			return c.fallback.Complete(prompt)
+		}
 		return "", err
 	}
 
 	// Enforce rate limiting
 	if err := c.enforceRateLimit(); err != nil {
+		// If rate limited and we have a fallback, try fallback
+		if c.fallback != nil {
+			logger.Warn(logger.StatusWarn, "Primary LLM rate limited, using fallback (%s)", c.fallback.Provider)
+			return c.fallback.Complete(prompt)
+		}
 		return "", err
 	}
 
@@ -195,6 +232,12 @@ func (c *Client) Complete(prompt string) (string, error) {
 	// Update circuit breaker state
 	if err != nil {
 		c.recordFailure()
+
+		// If primary failed and we have a fallback, try fallback
+		if c.fallback != nil {
+			logger.Warn(logger.StatusWarn, "Primary LLM failed (%v), trying fallback (%s)", err, c.fallback.Provider)
+			return c.fallback.Complete(prompt)
+		}
 	} else {
 		c.recordSuccess()
 	}
@@ -240,7 +283,7 @@ func (c *Client) completeOpenRouter(prompt string) (string, error) {
 		}
 
 		if resp.StatusCode == 429 {
-			fmt.Println("    ⏳ OpenRouter Rate Limit. Retrying in 5s...")
+			logger.InfoDepth(2, logger.StatusWait, "OpenRouter Rate Limit. Retrying in 5s...")
 			time.Sleep(5 * time.Second)
 			continue
 		}
@@ -307,7 +350,7 @@ func (c *Client) completeGemini(prompt string) (string, error) {
 				}
 			}
 
-			fmt.Printf("    ⏳ Rate limit (%d). Retrying in %v...\n", resp.StatusCode, delay)
+			logger.InfoDepth(2, logger.StatusWait, "Rate limit (%d). Retrying in %v...", resp.StatusCode, delay)
 			time.Sleep(delay)
 			continue
 		}
