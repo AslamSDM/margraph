@@ -25,16 +25,36 @@ const (
 type EdgeType string
 
 const (
-	EdgeTypeTrade        EdgeType = "Trade"
-	EdgeTypeCapital      EdgeType = "Capital"
-	EdgeTypeRegulatory   EdgeType = "Regulatory"
-	EdgeTypeHasIndustry  EdgeType = "HasIndustry"  // Nation -> Industry
-	EdgeTypeHasCompany   EdgeType = "HasCompany"   // Industry -> Company
-	EdgeTypeRequires     EdgeType = "Requires"     // Industry/Company -> RawMaterial
-	EdgeTypeProduces     EdgeType = "Produces"     // Nation -> RawMaterial
+	EdgeTypeTrade         EdgeType = "Trade"
+	EdgeTypeCapital       EdgeType = "Capital"
+	EdgeTypeRegulatory    EdgeType = "Regulatory"
+	EdgeTypeHasIndustry   EdgeType = "HasIndustry"   // Nation -> Industry
+	EdgeTypeHasCompany    EdgeType = "HasCompany"    // Industry -> Company
+	EdgeTypeRequires      EdgeType = "Requires"      // Industry/Company -> RawMaterial
+	EdgeTypeProduces      EdgeType = "Produces"      // Nation -> RawMaterial
 	EdgeTypeSubstituteFor EdgeType = "SubstituteFor" // Commodity -> Commodity (for finding winners)
 	EdgeTypeCompetesWith  EdgeType = "CompetesWith"  // Company -> Company
 	EdgeTypeDependsOn     EdgeType = "DependsOn"     // Company -> Supplier
+
+	// Supply Chain Directional Edges (for shock propagation)
+	EdgeTypeSupplies      EdgeType = "Supplies"      // Supplier -> Client (shocks flow downstream)
+	EdgeTypeProcuresFrom  EdgeType = "ProcuresFrom"  // Client -> Supplier (for reference, shocks flow reverse)
+	EdgeTypeManufactures  EdgeType = "Manufactures"  // Company -> Product
+	EdgeTypeConsumes      EdgeType = "Consumes"      // Company -> RawMaterial
+)
+
+// EdgeDirectionality defines how shocks propagate through edge types
+type EdgeDirectionality string
+
+const (
+	// Unidirectional: shocks only flow from source to target
+	DirectionalityUnidirectional EdgeDirectionality = "Unidirectional"
+
+	// Bidirectional: shocks can flow both ways
+	DirectionalityBidirectional EdgeDirectionality = "Bidirectional"
+
+	// Reverse: shocks flow from target back to source
+	DirectionalityReverse EdgeDirectionality = "Reverse"
 )
 
 // Node represents an entity in the economic ecosystem.
@@ -52,12 +72,13 @@ type Node struct {
 
 // Edge represents a connection between two nodes.
 type Edge struct {
-	SourceID  string    `json:"source_id"`
-	TargetID  string    `json:"target_id"`
-	Type      EdgeType  `json:"type"`
-	Weight    float64   `json:"weight"`    // Represents strength, volume, or influence (0.0 to 1.0 or scalar)
-	Timestamp time.Time `json:"timestamp"` // Temporal Knowledge Graph: Track when edge was created/updated
-	Status    string    `json:"status"`    // Active, Blocked, Suspended, etc.
+	SourceID      string              `json:"source_id"`
+	TargetID      string              `json:"target_id"`
+	Type          EdgeType            `json:"type"`
+	Weight        float64             `json:"weight"`          // Represents strength, volume, or influence (0.0 to 1.0 or scalar)
+	Timestamp     time.Time           `json:"timestamp"`       // Temporal Knowledge Graph: Track when edge was created/updated
+	Status        string              `json:"status"`          // Active, Blocked, Suspended, etc.
+	Directionality EdgeDirectionality `json:"directionality"` // How shocks propagate through this edge
 }
 
 // EdgeHistory tracks the temporal evolution of a relationship
@@ -223,6 +244,11 @@ func (g *Graph) AddEdge(e *Edge) {
 	// Set default status
 	if e.Status == "" {
 		e.Status = "Active"
+	}
+
+	// Set directionality based on edge type
+	if e.Directionality == "" {
+		e.Directionality = GetEdgeDirectionality(e.Type)
 	}
 
 	g.Edges = append(g.Edges, e)
@@ -437,11 +463,15 @@ func Load(filename string) (*Graph, error) {
 	}
 	g.Adjacency = make(map[string][]*Edge) // Rebuild cache
 
-	// Populate Adjacency
+	// Populate Adjacency and migrate directionality
 	if g.Edges == nil {
 		g.Edges = make([]*Edge, 0)
 	} else {
 		for _, e := range g.Edges {
+			// Migrate: Set directionality for edges that don't have it
+			if e.Directionality == "" {
+				e.Directionality = GetEdgeDirectionality(e.Type)
+			}
 			g.Adjacency[e.SourceID] = append(g.Adjacency[e.SourceID], e)
 		}
 	}

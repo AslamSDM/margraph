@@ -61,36 +61,52 @@ func (s *Simulator) RunShock(event ShockEvent) {
 	activationMap := make(map[string]float64) // nodeID -> activation energy
 	activationMap[event.TargetNodeID] = 1.0 - effectiveImpact // Initial shock energy
 
-	// First-order propagation
+	// First-order propagation - respect edge directionality
 	outgoing := s.Graph.GetOutgoingEdges(event.TargetNodeID)
 	impactedNodeIDs := make([]string, 0)
 	winners := make([]string, 0) // Track nodes that benefit (substitutes, competitors)
 
 	for _, e := range outgoing {
+		// Check if shock should propagate through this edge (respects directionality)
+		if !graph.ShouldPropagateShock(e, true) {
+			logger.InfoDepth(2, "", "Skipping %s -> %s (%s): Wrong direction for shock propagation",
+				target.Name, e.TargetID, e.Type)
+			continue
+		}
+
 		neighbor, _ := s.Graph.GetNode(e.TargetID)
 		originalWeight := e.Weight
+
+		// Get propagation factor based on edge type
+		propagationFactor := graph.GetShockPropagationFactor(e.Type)
 
 		// Calculate new weight based on shock
 		newWeight := originalWeight * effectiveImpact
 
-		// Actually update the edge weight in the graph (THIS WAS MISSING!)
+		// Actually update the edge weight in the graph
 		sentimentScore := -(1.0 - effectiveImpact) // Negative shock
 		relevanceScore := 1.0 // Direct connection = high relevance
 		eventID := fmt.Sprintf("shock_%s_%d", event.TargetNodeID, len(activationMap))
 
 		if err := s.Graph.UpdateEdgeWeight(e.SourceID, e.TargetID, e.Type, sentimentScore, relevanceScore, eventID); err == nil {
-			logger.SuccessDepth(2, "%s -> %s: Weight %.2f -> %.2f (-%0.f%%)", target.Name, neighbor.Name, originalWeight, newWeight, (1.0-effectiveImpact)*100)
+			logger.SuccessDepth(2, "%s -> %s [%s]: Weight %.2f -> %.2f (-%0.f%%, propagation: %.0f%%)",
+				target.Name, neighbor.Name, e.Type, originalWeight, newWeight,
+				(1.0-effectiveImpact)*100, propagationFactor*100)
 
-			// Propagate activation energy
-			activationMap[e.TargetID] = (1.0 - effectiveImpact) * e.Weight * 0.7 // 70% pass-through
+			// Propagate activation energy with edge-specific factor
+			activationMap[e.TargetID] = (1.0 - effectiveImpact) * e.Weight * propagationFactor
 
-			// Apply health impact to downstream node
-			healthDelta := -0.1 * (1.0 - effectiveImpact)
+			// Apply health impact to downstream node (scaled by propagation factor)
+			healthDelta := -0.1 * (1.0 - effectiveImpact) * propagationFactor
 			s.Graph.UpdateNodeHealth(e.TargetID, healthDelta)
 
 			impactedNodeIDs = append(impactedNodeIDs, e.TargetID)
 		}
 	}
+
+	// Also check for reverse-direction edges (e.g., ProcuresFrom)
+	// These would be incoming edges where we are the target, but shock flows backwards
+	s.propagateReverseShocks(event.TargetNodeID, target, effectiveImpact, activationMap, &impactedNodeIDs)
 
 	// Identify WINNERS: Find substitute and competitor nodes
 	s.identifyWinners(event.TargetNodeID, &winners)
@@ -184,4 +200,48 @@ func (s *Simulator) findSubstitutes(commodityID string, winners *[]string) {
 			}
 		}
 	})
+}
+
+// propagateReverseShocks handles edges where shocks flow backwards (client -> supplier)
+func (s *Simulator) propagateReverseShocks(targetNodeID string, target *graph.Node, effectiveImpact float64, activationMap map[string]float64, impactedNodeIDs *[]string) {
+	// We need to check all edges in the graph where we are the TARGET
+	// and the edge has reverse directionality
+	for _, edge := range s.Graph.Edges {
+		if edge.TargetID != targetNodeID {
+			continue
+		}
+
+		// Check if this is a reverse-direction edge
+		if !graph.ShouldPropagateShock(edge, false) {
+			continue
+		}
+
+		// Shock propagates backwards (from target to source)
+		upstream, ok := s.Graph.GetNode(edge.SourceID)
+		if !ok {
+			continue
+		}
+
+		propagationFactor := graph.GetShockPropagationFactor(edge.Type)
+		originalWeight := edge.Weight
+		newWeight := originalWeight * effectiveImpact
+
+		sentimentScore := -(1.0 - effectiveImpact)
+		relevanceScore := 1.0
+		eventID := fmt.Sprintf("shock_%s_reverse", targetNodeID)
+
+		if err := s.Graph.UpdateEdgeWeight(edge.SourceID, edge.TargetID, edge.Type, sentimentScore, relevanceScore, eventID); err == nil {
+			logger.SuccessDepth(2, "%s <- %s [%s REVERSE]: Weight %.2f -> %.2f (upstream impact: %.0f%%)",
+				upstream.Name, target.Name, edge.Type, originalWeight, newWeight, propagationFactor*100)
+
+			// Propagate activation energy upstream
+			activationMap[edge.SourceID] = (1.0 - effectiveImpact) * edge.Weight * propagationFactor
+
+			// Apply health impact to upstream node
+			healthDelta := -0.05 * (1.0 - effectiveImpact) * propagationFactor // Weaker upstream impact
+			s.Graph.UpdateNodeHealth(edge.SourceID, healthDelta)
+
+			*impactedNodeIDs = append(*impactedNodeIDs, edge.SourceID)
+		}
+	}
 }

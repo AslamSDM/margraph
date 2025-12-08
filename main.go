@@ -76,6 +76,18 @@ func main() {
 	} else {
 		logger.Success("Using existing graph with %d nodes and %d edges", len(g.Nodes), len(g.Edges))
 		logger.Info(logger.StatusInit, "Use 'reseed' command to rebuild graph from scratch")
+
+		// Migrate existing edges to have directionality
+		migrated := g.MigrateEdgeDirectionality()
+		if migrated > 0 {
+			logger.Info(logger.StatusInit, "Migrated %d edges to have directionality", migrated)
+			// Save the migrated graph
+			if err := g.Save(graphFile); err != nil {
+				logger.Warn(logger.StatusWarn, "Failed to save migrated graph: %v", err)
+			} else {
+				logger.Success("Saved migrated graph with edge directionality")
+			}
+		}
 	}
 
 	// 3. Interactive or Demo Mode
@@ -120,6 +132,7 @@ func main() {
 		logger.Plain("")
 		logger.Section("Available Commands")
 		logger.Plain("  show          - Show all nodes and edges")
+		logger.Plain("  edges         - Show edge directionality rules")
 		logger.Plain("  shock <ID>    - Simulate a trade ban/shock on a Node ID")
 		logger.Plain("  boost <ID>    - Simulate positive news boost for a Node ID")
 		logger.Plain("  news          - Force check for latest news")
@@ -139,6 +152,10 @@ func main() {
 		switch parts[0] {
 		case "show":
 			printGraph(g)
+		case "edges":
+			printEdgeDirectionality()
+		case "migrate":
+			migrateEdges(g, graphFile)
 		case "shock":
 			if len(parts) < 2 {
 				logger.Warn(logger.StatusWarn, "Usage: shock <NodeID> (e.g., shock india)")
@@ -305,7 +322,87 @@ func printGraph(g *graph.Graph) {
 	logger.Plain("")
 	logger.Section("Edges")
 	for _, e := range g.Edges {
-		logger.Plain("%s --(%.2f)--> %s [%s] Status: %s", e.SourceID, e.Weight, e.TargetID, e.Type, e.Status)
+		dir := "→"
+		if graph.GetEdgeDirectionality(e.Type) == graph.DirectionalityReverse {
+			dir = "←"
+		} else if graph.GetEdgeDirectionality(e.Type) == graph.DirectionalityBidirectional {
+			dir = "↔"
+		}
+		logger.Plain("%s %s %s (%.2f) [%s] Status: %s", e.SourceID, dir, e.TargetID, e.Weight, e.Type, e.Status)
+	}
+}
+
+func printEdgeDirectionality() {
+	logger.Plain("")
+	logger.Section("Edge Directionality Rules")
+	logger.Plain("")
+	logger.Plain("How shocks propagate through different edge types:")
+	logger.Plain("")
+
+	edgeTypes := []graph.EdgeType{
+		graph.EdgeTypeSupplies,
+		graph.EdgeTypeProcuresFrom,
+		graph.EdgeTypeManufactures,
+		graph.EdgeTypeConsumes,
+		graph.EdgeTypeProduces,
+		graph.EdgeTypeDependsOn,
+		graph.EdgeTypeRequires,
+		graph.EdgeTypeTrade,
+		graph.EdgeTypeCapital,
+		graph.EdgeTypeCompetesWith,
+		graph.EdgeTypeSubstituteFor,
+		graph.EdgeTypeRegulatory,
+		graph.EdgeTypeHasIndustry,
+		graph.EdgeTypeHasCompany,
+	}
+
+	logger.Plain("%-25s %-40s", "Edge Type", "Directionality & Propagation")
+	logger.Plain(strings.Repeat("-", 70))
+
+	for _, et := range edgeTypes {
+		desc := graph.EdgeDirectionalityDescription(et)
+		logger.Plain("%-25s %s", et, desc)
+	}
+
+	logger.Plain("")
+	logger.Plain("Legend:")
+	logger.Plain("  → Unidirectional (shock flows supplier → client)")
+	logger.Plain("  ← Reverse (shock flows client → supplier)")
+	logger.Plain("  ↔ Bidirectional (shock flows both ways)")
+	logger.Plain("")
+	logger.Plain("Propagation: Percentage of shock energy that passes through the edge")
+	logger.Plain("")
+}
+
+func migrateEdges(g *graph.Graph, graphFile string) {
+	logger.Plain("")
+	logger.Section("Edge Migration")
+	logger.Plain("")
+
+	// Check current state
+	isValid, missing := g.ValidateEdgeDirectionality()
+	if isValid {
+		logger.Success("All edges already have directionality set!")
+		g.PrintEdgeDirectionalityReport()
+		return
+	}
+
+	logger.Info(logger.StatusInit, "Found %d edges without directionality", len(missing))
+	logger.Plain("")
+	logger.Plain("Migrating edges...")
+
+	migrated := g.MigrateEdgeDirectionality()
+	logger.Success("Migrated %d edges", migrated)
+	logger.Plain("")
+
+	// Show report
+	g.PrintEdgeDirectionalityReport()
+
+	// Save
+	if err := g.Save(graphFile); err != nil {
+		logger.Error(logger.StatusErr, "Failed to save: %v", err)
+	} else {
+		logger.Success("Saved migrated graph to %s", graphFile)
 	}
 }
 
