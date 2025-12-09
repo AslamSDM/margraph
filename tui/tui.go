@@ -10,15 +10,15 @@ import (
 
 // TUI represents the terminal user interface
 type TUI struct {
-	app          *tview.Application
-	logsView     *tview.TextView
-	inputField   *tview.InputField
-	statsView    *tview.TextView
-	headerView   *tview.TextView
-	commandChan  chan string
-	mu           sync.Mutex
-	logBuffer    []string
-	maxLogLines  int
+	app         *tview.Application
+	logsView    *tview.TextView
+	inputField  *tview.InputField
+	statsView   *tview.TextView
+	headerView  *tview.TextView
+	commandChan chan string
+	mu          sync.Mutex
+	logBuffer   []string
+	maxLogLines int
 }
 
 // New creates a new TUI instance
@@ -44,7 +44,8 @@ func New() *TUI {
 	t.statsView.SetBorder(true).
 		SetTitle(" Graph Statistics ").
 		SetBorderColor(tcell.ColorNames["green"])
-	t.UpdateStats(0, 0)
+	// Initialize stats view directly (app not running yet)
+	t.initStats()
 
 	// Create logs view
 	t.logsView = tview.NewTextView().
@@ -116,14 +117,30 @@ func (t *TUI) Log(message string) {
 		t.logBuffer = t.logBuffer[len(t.logBuffer)-t.maxLogLines:]
 	}
 
-	// Update view
-	t.app.QueueUpdateDraw(func() {
-		t.logsView.Clear()
-		for _, line := range t.logBuffer {
-			fmt.Fprintln(t.logsView, line)
-		}
-		t.logsView.ScrollToEnd()
-	})
+	// Update view - use goroutine to avoid blocking/deadlock during initialization
+	go func() {
+		t.app.QueueUpdateDraw(func() {
+			t.logsView.Clear()
+			for _, line := range t.logBuffer {
+				fmt.Fprintln(t.logsView, line)
+			}
+			t.logsView.ScrollToEnd()
+		})
+	}()
+}
+
+// initStats initializes the statistics display (before app is running)
+func (t *TUI) initStats() {
+	t.statsView.Clear()
+	fmt.Fprintf(t.statsView, "[green::b]Nodes:[-:-:-] %d\n", 0)
+	fmt.Fprintf(t.statsView, "[yellow::b]Edges:[-:-:-] %d\n", 0)
+	fmt.Fprintf(t.statsView, "\n[cyan]Status:[-] Running\n")
+	fmt.Fprintf(t.statsView, "\n[white::b]Available Commands:[-:-:-]\n")
+	fmt.Fprintln(t.statsView, "[gray]show, edges, discover[-]")
+	fmt.Fprintln(t.statsView, "[gray]companies, relations[-]")
+	fmt.Fprintln(t.statsView, "[gray]shock, boost, news[-]")
+	fmt.Fprintln(t.statsView, "[gray]save, load, export[-]")
+	fmt.Fprintln(t.statsView, "[gray]exit[-]")
 }
 
 // UpdateStats updates the statistics display

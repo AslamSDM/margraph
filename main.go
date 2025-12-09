@@ -32,6 +32,17 @@ func main() {
 	// Initialize TUI
 	tuiApp := tui.New()
 
+	// Start TUI in background early so it can receive logs
+	go func() {
+		if err := tuiApp.Start(); err != nil {
+			fmt.Printf("TUI Error: %v\n", err)
+			os.Exit(1)
+		}
+	}()
+
+	// Give TUI a moment to initialize
+	time.Sleep(100 * time.Millisecond)
+
 	// Set up logger to write to TUI
 	logger.SetOutput(tuiApp.NewWriter())
 	logger.SetTUIMode(true)
@@ -162,16 +173,9 @@ func main() {
 	}()
 
 	// Process commands from TUI
-	go func() {
-		for input := range tuiApp.GetCommandChannel() {
-			handleCommand(input, g, sim, hub, newsEngine, socialMonitor, graphFile, tuiApp)
-		}
-	}()
-
-	// Run TUI (blocks until exit)
-	if err := tuiApp.Start(); err != nil {
-		logger.Error(logger.StatusErr, "TUI Error: %v", err)
-		os.Exit(1)
+	// Handle commands from TUI (blocks until TUI exits)
+	for input := range tuiApp.GetCommandChannel() {
+		handleCommand(input, g, sim, hub, newsEngine, socialMonitor, graphFile, tuiApp)
 	}
 }
 
