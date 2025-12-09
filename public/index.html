@@ -1,803 +1,885 @@
 <!DOCTYPE html>
 <html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Margraf: Financial Knowledge Graph</title>
     <script src="https://d3js.org/d3.v7.min.js"></script>
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
 
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-            background: #1e1e1e;
-            color: #e0e0e0;
-            overflow: hidden;
-        }
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+          Oxygen, Ubuntu, Cantarell, sans-serif;
+        background: #1e1e1e;
+        color: #e0e0e0;
+        overflow: hidden;
+      }
 
-        #header {
-            padding: 12px 20px;
-            background: #252525;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            border-bottom: 1px solid #3a3a3a;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.3);
-        }
+      #header {
+        padding: 12px 20px;
+        background: #252525;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        border-bottom: 1px solid #3a3a3a;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+      }
 
-        #header h2 {
-            font-size: 18px;
-            font-weight: 600;
-            color: #ffffff;
-        }
+      #header h2 {
+        font-size: 18px;
+        font-weight: 600;
+        color: #ffffff;
+      }
 
-        #status {
-            font-size: 12px;
-            padding: 4px 12px;
-            border-radius: 12px;
-            background: #333;
-        }
+      #status {
+        font-size: 12px;
+        padding: 4px 12px;
+        border-radius: 12px;
+        background: #333;
+      }
 
-        #status.connected {
-            background: #1e4d2b;
-            color: #4ade80;
-        }
+      #status.connected {
+        background: #1e4d2b;
+        color: #4ade80;
+      }
 
-        #status.disconnected {
-            background: #4d1e1e;
-            color: #f87171;
-        }
+      #status.disconnected {
+        background: #4d1e1e;
+        color: #f87171;
+      }
 
-        #graph-container {
-            width: 100vw;
-            height: calc(80vh - 48px);
-            position: relative;
-            background: #1e1e1e;
-        }
+      #graph-container {
+        width: 100vw;
+        height: calc(80vh - 48px);
+        position: relative;
+        background: #1e1e1e;
+      }
 
-        #graph {
-            width: 100%;
-            height: 100%;
-        }
+      #graph {
+        width: 100%;
+        height: 100%;
+      }
 
-        .node {
-            cursor: pointer;
-            transition: all 0.2s ease;
-        }
+      .node {
+        cursor: pointer;
+        transition: all 0.2s ease;
+      }
 
-        .node circle {
-            stroke: #555;
-            stroke-width: 2px;
-            transition: all 0.2s ease;
-        }
+      .node circle {
+        stroke: #555;
+        stroke-width: 2px;
+        transition: all 0.2s ease;
+      }
 
-        .node:hover circle {
-            stroke: #fff;
-            stroke-width: 3px;
-        }
+      .node:hover circle {
+        stroke: #fff;
+        stroke-width: 3px;
+      }
 
-        .node text {
-            font-size: 11px;
-            font-weight: 500;
-            pointer-events: none;
-            text-shadow: 0 1px 4px rgba(0,0,0,0.8);
-        }
+      .node text {
+        font-size: 11px;
+        font-weight: 500;
+        pointer-events: none;
+        text-shadow: 0 1px 4px rgba(0, 0, 0, 0.8);
+      }
 
-        .link {
-            stroke-opacity: 0.6;
-            transition: all 0.2s ease;
-        }
+      .link {
+        stroke-opacity: 0.6;
+        transition: all 0.2s ease;
+      }
 
-        .link:hover {
-            stroke-opacity: 1;
-            stroke-width: 3px !important;
-        }
+      .link:hover {
+        stroke-opacity: 1;
+        stroke-width: 3px !important;
+      }
 
-        .link-label {
-            font-size: 9px;
-            fill: #999;
-            pointer-events: none;
-            text-shadow: 0 1px 3px rgba(0,0,0,0.9);
-        }
+      .link-label {
+        font-size: 9px;
+        fill: #999;
+        pointer-events: none;
+        text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9);
+      }
 
-        #logs {
-            height: calc(20vh);
-            overflow-y: auto;
-            padding: 12px;
-            font-family: 'Courier New', monospace;
-            font-size: 11px;
-            background: #0a0a0a;
-            border-top: 1px solid #3a3a3a;
-        }
+      #logs {
+        height: calc(20vh);
+        overflow-y: auto;
+        padding: 12px;
+        font-family: "Courier New", monospace;
+        font-size: 11px;
+        background: #0a0a0a;
+        border-top: 1px solid #3a3a3a;
+      }
 
-        #logs::-webkit-scrollbar {
-            width: 8px;
-        }
+      #logs::-webkit-scrollbar {
+        width: 8px;
+      }
 
-        #logs::-webkit-scrollbar-track {
-            background: #1a1a1a;
-        }
+      #logs::-webkit-scrollbar-track {
+        background: #1a1a1a;
+      }
 
-        #logs::-webkit-scrollbar-thumb {
-            background: #444;
-            border-radius: 4px;
-        }
+      #logs::-webkit-scrollbar-thumb {
+        background: #444;
+        border-radius: 4px;
+      }
 
-        .log-entry {
-            margin-bottom: 6px;
-            padding-bottom: 6px;
-            border-bottom: 1px solid #252525;
-            line-height: 1.5;
-        }
+      .log-entry {
+        margin-bottom: 6px;
+        padding-bottom: 6px;
+        border-bottom: 1px solid #252525;
+        line-height: 1.5;
+      }
 
-        .log-type {
-            font-weight: bold;
-            margin-right: 8px;
-        }
+      .log-type {
+        font-weight: bold;
+        margin-right: 8px;
+      }
 
-        .log-sys { color: #4ade80; }
-        .log-news { color: #fbbf24; }
-        .log-social { color: #60a5fa; }
-        .log-market { color: #f87171; }
-        .log-info { color: #a78bfa; }
+      .log-sys {
+        color: #4ade80;
+      }
+      .log-news {
+        color: #fbbf24;
+      }
+      .log-social {
+        color: #60a5fa;
+      }
+      .log-market {
+        color: #f87171;
+      }
+      .log-info {
+        color: #a78bfa;
+      }
 
-        #stats {
-            position: absolute;
-            top: 10px;
-            right: 10px;
-            background: rgba(0,0,0,0.7);
-            padding: 10px 15px;
-            border-radius: 8px;
-            font-size: 11px;
-            backdrop-filter: blur(10px);
-            border: 1px solid #3a3a3a;
-        }
+      #stats {
+        position: absolute;
+        top: 10px;
+        right: 10px;
+        background: rgba(0, 0, 0, 0.7);
+        padding: 10px 15px;
+        border-radius: 8px;
+        font-size: 11px;
+        backdrop-filter: blur(10px);
+        border: 1px solid #3a3a3a;
+      }
 
-        #stats div {
-            margin-bottom: 4px;
-        }
+      #stats div {
+        margin-bottom: 4px;
+      }
 
-        .legend {
-            position: absolute;
-            bottom: 10px;
-            left: 10px;
-            background: rgba(0,0,0,0.7);
-            padding: 10px 15px;
-            border-radius: 8px;
-            font-size: 10px;
-            backdrop-filter: blur(10px);
-            border: 1px solid #3a3a3a;
-        }
+      .legend {
+        position: absolute;
+        bottom: 10px;
+        left: 10px;
+        background: rgba(0, 0, 0, 0.7);
+        padding: 10px 15px;
+        border-radius: 8px;
+        font-size: 10px;
+        backdrop-filter: blur(10px);
+        border: 1px solid #3a3a3a;
+      }
 
-        .legend-item {
-            display: flex;
-            align-items: center;
-            margin-bottom: 6px;
-        }
+      .legend-item {
+        display: flex;
+        align-items: center;
+        margin-bottom: 6px;
+      }
 
-        .legend-color {
-            width: 16px;
-            height: 16px;
-            border-radius: 50%;
-            margin-right: 8px;
-            border: 2px solid #555;
-        }
+      .legend-color {
+        width: 16px;
+        height: 16px;
+        border-radius: 50%;
+        margin-right: 8px;
+        border: 2px solid #555;
+      }
 
-        .tooltip {
-            position: absolute;
-            background: rgba(0,0,0,0.9);
-            color: #fff;
-            padding: 8px 12px;
-            border-radius: 6px;
-            font-size: 11px;
-            pointer-events: none;
-            opacity: 0;
-            transition: opacity 0.2s;
-            border: 1px solid #555;
-            max-width: 250px;
-        }
+      .tooltip {
+        position: absolute;
+        background: rgba(0, 0, 0, 0.9);
+        color: #fff;
+        padding: 8px 12px;
+        border-radius: 6px;
+        font-size: 11px;
+        pointer-events: none;
+        opacity: 0;
+        transition: opacity 0.2s;
+        border: 1px solid #555;
+        max-width: 250px;
+      }
 
-        #company-panel {
-            position: absolute;
-            top: 60px;
-            right: 10px;
-            width: 350px;
-            max-height: calc(100% - 80px);
-            background: rgba(0,0,0,0.85);
-            border: 1px solid #3a3a3a;
-            border-radius: 8px;
-            backdrop-filter: blur(10px);
-            overflow-y: auto;
-            display: none;
-        }
+      #company-panel {
+        position: absolute;
+        top: 60px;
+        right: 10px;
+        width: 350px;
+        max-height: calc(100% - 80px);
+        background: rgba(0, 0, 0, 0.85);
+        border: 1px solid #3a3a3a;
+        border-radius: 8px;
+        backdrop-filter: blur(10px);
+        overflow-y: auto;
+        display: none;
+      }
 
-        #company-panel.visible {
-            display: block;
-        }
+      #company-panel.visible {
+        display: block;
+      }
 
-        #company-panel::-webkit-scrollbar {
-            width: 6px;
-        }
+      #company-panel::-webkit-scrollbar {
+        width: 6px;
+      }
 
-        #company-panel::-webkit-scrollbar-track {
-            background: #1a1a1a;
-        }
+      #company-panel::-webkit-scrollbar-track {
+        background: #1a1a1a;
+      }
 
-        #company-panel::-webkit-scrollbar-thumb {
-            background: #444;
-            border-radius: 3px;
-        }
+      #company-panel::-webkit-scrollbar-thumb {
+        background: #444;
+        border-radius: 3px;
+      }
 
-        .panel-header {
-            padding: 12px 15px;
-            background: #252525;
-            border-bottom: 1px solid #3a3a3a;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
+      .panel-header {
+        padding: 12px 15px;
+        background: #252525;
+        border-bottom: 1px solid #3a3a3a;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
 
-        .panel-header h3 {
-            font-size: 14px;
-            font-weight: 600;
-            margin: 0;
-        }
+      .panel-header h3 {
+        font-size: 14px;
+        font-weight: 600;
+        margin: 0;
+      }
 
-        .close-btn {
-            background: none;
-            border: none;
-            color: #999;
-            font-size: 18px;
-            cursor: pointer;
-            padding: 0;
-            line-height: 1;
-        }
+      .close-btn {
+        background: none;
+        border: none;
+        color: #999;
+        font-size: 18px;
+        cursor: pointer;
+        padding: 0;
+        line-height: 1;
+      }
 
-        .close-btn:hover {
-            color: #fff;
-        }
+      .close-btn:hover {
+        color: #fff;
+      }
 
-        .panel-content {
-            padding: 15px;
-        }
+      .panel-content {
+        padding: 15px;
+      }
 
-        .company-search {
-            margin-bottom: 15px;
-        }
+      .company-search {
+        margin-bottom: 15px;
+      }
 
-        .company-search input {
-            width: 100%;
-            padding: 8px 12px;
-            background: #1a1a1a;
-            border: 1px solid #3a3a3a;
-            border-radius: 4px;
-            color: #e0e0e0;
-            font-size: 12px;
-        }
+      .company-search input {
+        width: 100%;
+        padding: 8px 12px;
+        background: #1a1a1a;
+        border: 1px solid #3a3a3a;
+        border-radius: 4px;
+        color: #e0e0e0;
+        font-size: 12px;
+      }
 
-        .company-search input:focus {
-            outline: none;
-            border-color: #60a5fa;
-        }
+      .company-search input:focus {
+        outline: none;
+        border-color: #60a5fa;
+      }
 
-        .section-title {
-            font-size: 12px;
-            font-weight: 600;
-            color: #999;
-            text-transform: uppercase;
-            margin-bottom: 8px;
-            margin-top: 15px;
-        }
+      .section-title {
+        font-size: 12px;
+        font-weight: 600;
+        color: #999;
+        text-transform: uppercase;
+        margin-bottom: 8px;
+        margin-top: 15px;
+      }
 
-        .section-title:first-child {
-            margin-top: 0;
-        }
+      .section-title:first-child {
+        margin-top: 0;
+      }
 
-        .relation-list {
-            list-style: none;
-            padding: 0;
-            margin: 0;
-        }
+      .relation-list {
+        list-style: none;
+        padding: 0;
+        margin: 0;
+      }
 
-        .relation-item {
-            padding: 8px 10px;
-            background: #1a1a1a;
-            border: 1px solid #2a2a2a;
-            border-radius: 4px;
-            margin-bottom: 6px;
-            font-size: 12px;
-        }
+      .relation-item {
+        padding: 8px 10px;
+        background: #1a1a1a;
+        border: 1px solid #2a2a2a;
+        border-radius: 4px;
+        margin-bottom: 6px;
+        font-size: 12px;
+      }
 
-        .relation-item .name {
-            font-weight: 500;
-            color: #e0e0e0;
-        }
+      .relation-item .name {
+        font-weight: 500;
+        color: #e0e0e0;
+      }
 
-        .relation-item .meta {
-            font-size: 10px;
-            color: #999;
-            margin-top: 3px;
-        }
+      .relation-item .meta {
+        font-size: 10px;
+        color: #999;
+        margin-top: 3px;
+      }
 
-        .no-data {
-            color: #666;
-            font-size: 11px;
-            font-style: italic;
-        }
+      .no-data {
+        color: #666;
+        font-size: 11px;
+        font-style: italic;
+      }
 
-        .company-info {
-            background: #1a1a1a;
-            border: 1px solid #2a2a2a;
-            border-radius: 4px;
-            padding: 10px 12px;
-            margin-bottom: 15px;
-        }
+      .company-info {
+        background: #1a1a1a;
+        border: 1px solid #2a2a2a;
+        border-radius: 4px;
+        padding: 10px 12px;
+        margin-bottom: 15px;
+      }
 
-        .company-info .name {
-            font-size: 16px;
-            font-weight: 600;
-            color: #fff;
-            margin-bottom: 5px;
-        }
+      .company-info .name {
+        font-size: 16px;
+        font-weight: 600;
+        color: #fff;
+        margin-bottom: 5px;
+      }
 
-        .company-info .id {
-            font-size: 10px;
-            color: #666;
-        }
+      .company-info .id {
+        font-size: 10px;
+        color: #666;
+      }
     </style>
-</head>
-<body>
+  </head>
+  <body>
     <div id="header">
-        <h2>Margraf Live - Financial Knowledge Graph</h2>
-        <div id="status">Connecting...</div>
+      <h2>Margraf Live - Financial Knowledge Graph</h2>
+      <div id="status">Connecting...</div>
     </div>
 
     <div id="graph-container">
-        <svg id="graph"></svg>
-        <div id="stats">
-            <div><strong>Graph Statistics</strong></div>
-            <div>Nodes: <span id="node-count">0</span></div>
-            <div>Edges: <span id="edge-count">0</span></div>
-            <div>Last Update: <span id="last-update">-</span></div>
+      <svg id="graph"></svg>
+      <div id="stats">
+        <div><strong>Graph Statistics</strong></div>
+        <div>Nodes: <span id="node-count">0</span></div>
+        <div>Edges: <span id="edge-count">0</span></div>
+        <div>Last Update: <span id="last-update">-</span></div>
+      </div>
+      <div class="legend">
+        <div><strong>Node Types</strong></div>
+        <div class="legend-item">
+          <div class="legend-color" style="background: #60a5fa"></div>
+          Nation
         </div>
-        <div class="legend">
-            <div><strong>Node Types</strong></div>
-            <div class="legend-item"><div class="legend-color" style="background: #60a5fa;"></div>Nation</div>
-            <div class="legend-item"><div class="legend-color" style="background: #f87171;"></div>Corporation</div>
-            <div class="legend-item"><div class="legend-color" style="background: #4ade80;"></div>Raw Material</div>
-            <div class="legend-item"><div class="legend-color" style="background: #fbbf24;"></div>Industry</div>
-            <div class="legend-item"><div class="legend-color" style="background: #a78bfa;"></div>Product</div>
+        <div class="legend-item">
+          <div class="legend-color" style="background: #f87171"></div>
+          Corporation
         </div>
-        <div class="tooltip" id="tooltip"></div>
+        <div class="legend-item">
+          <div class="legend-color" style="background: #4ade80"></div>
+          Raw Material
+        </div>
+        <div class="legend-item">
+          <div class="legend-color" style="background: #fbbf24"></div>
+          Industry
+        </div>
+        <div class="legend-item">
+          <div class="legend-color" style="background: #a78bfa"></div>
+          Product
+        </div>
+      </div>
+      <div class="tooltip" id="tooltip"></div>
 
-        <div id="company-panel">
-            <div class="panel-header">
-                <h3>Company Relations</h3>
-                <button class="close-btn" onclick="closeCompanyPanel()">&times;</button>
-            </div>
-            <div class="panel-content">
-                <div class="company-search">
-                    <input type="text" id="company-search-input" placeholder="Search companies...">
-                </div>
-                <div id="company-details"></div>
-            </div>
+      <div id="company-panel">
+        <div class="panel-header">
+          <h3>Company Relations</h3>
+          <button class="close-btn" onclick="closeCompanyPanel()">
+            &times;
+          </button>
         </div>
+        <div class="panel-content">
+          <div class="company-search">
+            <input
+              type="text"
+              id="company-search-input"
+              placeholder="Search companies..."
+            />
+          </div>
+          <div id="company-details"></div>
+        </div>
+      </div>
     </div>
 
     <div id="logs"></div>
 
     <script>
-        // WebSocket connection
-        const ws = new WebSocket("ws://" + window.location.host + "/ws");
-        const logDiv = document.getElementById("logs");
-        const statusDiv = document.getElementById("status");
-        const tooltip = document.getElementById("tooltip");
+      // WebSocket connection
+      const ws = new WebSocket("ws://" + window.location.host + "/ws");
+      const logDiv = document.getElementById("logs");
+      const statusDiv = document.getElementById("status");
+      const tooltip = document.getElementById("tooltip");
 
-        // Graph dimensions
-        const width = window.innerWidth;
-        const height = window.innerHeight * 0.8 - 48;
+      // Graph dimensions
+      const width = window.innerWidth;
+      const height = window.innerHeight * 0.8 - 48;
 
-        // SVG setup
-        const svg = d3.select("#graph")
-            .attr("width", width)
-            .attr("height", height)
-            .attr("viewBox", [0, 0, width, height]);
+      // SVG setup
+      const svg = d3
+        .select("#graph")
+        .attr("width", width)
+        .attr("height", height)
+        .attr("viewBox", [0, 0, width, height]);
 
-        // Add zoom behavior
-        const g = svg.append("g");
+      // Add zoom behavior
+      const g = svg.append("g");
 
-        const zoom = d3.zoom()
-            .scaleExtent([0.1, 4])
-            .on("zoom", (event) => {
-                g.attr("transform", event.transform);
+      const zoom = d3
+        .zoom()
+        .scaleExtent([0.1, 4])
+        .on("zoom", (event) => {
+          g.attr("transform", event.transform);
+        });
+
+      svg.call(zoom);
+
+      // Color scale for node types
+      const nodeColors = {
+        Nation: "#60a5fa",
+        Corporation: "#f87171",
+        RawMaterial: "#4ade80",
+        Industry: "#fbbf24",
+        Product: "#a78bfa",
+        Crop: "#fb923c",
+      };
+
+      // Link color based on status
+      const linkColors = {
+        Strong: "#4ade80",
+        Active: "#60a5fa",
+        Weak: "#fbbf24",
+        Blocked: "#f87171",
+      };
+
+      // Force simulation
+      const simulation = d3
+        .forceSimulation()
+        .force(
+          "link",
+          d3
+            .forceLink()
+            .id((d) => d.id)
+            .distance(150)
+        )
+        .force("charge", d3.forceManyBody().strength(-400))
+        .force("center", d3.forceCenter(width / 2, height / 2))
+        .force("collision", d3.forceCollide().radius(30));
+
+      let link, linkLabel, node, nodeLabel;
+      let currentData = { nodes: [], links: [] };
+      let nodePositions = new Map(); // Store node positions to preserve them
+
+      // WebSocket handlers
+      ws.onopen = () => {
+        statusDiv.textContent = "Connected";
+        statusDiv.className = "connected";
+        addLog("sys", "Connected to Margraf Stream");
+        // Request initial graph data and companies list
+        ws.send(JSON.stringify({ type: "get_full_graph", payload: {} }));
+        ws.send(JSON.stringify({ type: "get_companies_list", payload: {} }));
+      };
+
+      ws.onclose = () => {
+        statusDiv.textContent = "Disconnected";
+        statusDiv.className = "disconnected";
+        addLog("sys", "Connection lost");
+      };
+
+      ws.onmessage = (event) => {
+        const msg = JSON.parse(event.data);
+
+        if (msg.type === "graph_update") {
+          updateGraph(JSON.parse(msg.payload));
+        } else if (msg.type === "system") {
+          addLog("sys", msg.payload);
+        } else if (msg.type === "news_alert") {
+          addLog("news", "📰 " + msg.payload);
+        } else if (msg.type === "social_pulse") {
+          const p = msg.payload;
+          addLog(
+            "social",
+            `🌐 ${p.platform}: ${p.user} (Sentiment: ${p.sentiment.toFixed(2)})`
+          );
+        } else if (msg.type === "market_update") {
+          const p = msg.payload;
+          addLog(
+            "market",
+            `📈 ${p.id}: $${p.price.toFixed(2)} ${
+              p.currency
+            } (Health: ${p.health.toFixed(2)})`
+          );
+        } else if (msg.type === "company_relations") {
+          displayCompanyRelations(JSON.parse(msg.payload));
+        } else if (msg.type === "companies_list") {
+          updateCompanySearchResults(JSON.parse(msg.payload));
+        } else if (msg.type === "error") {
+          addLog("info", "Error: " + msg.payload);
+        } else {
+          addLog("info", JSON.stringify(msg));
+        }
+      };
+
+      function updateGraph(data) {
+        // Update statistics
+        document.getElementById("node-count").textContent = data.nodes.length;
+        document.getElementById("edge-count").textContent = data.links.length;
+        document.getElementById("last-update").textContent =
+          new Date().toLocaleTimeString();
+
+        // Check if data has actually changed
+        if (JSON.stringify(currentData) === JSON.stringify(data)) {
+          return; // No changes, skip update
+        }
+
+        // Preserve existing node positions
+        if (simulation.nodes().length > 0) {
+          simulation.nodes().forEach((node) => {
+            nodePositions.set(node.id, {
+              x: node.x,
+              y: node.y,
+              vx: node.vx,
+              vy: node.vy,
             });
+          });
+        }
 
-        svg.call(zoom);
+        // Restore positions for existing nodes
+        data.nodes.forEach((node) => {
+          const pos = nodePositions.get(node.id);
+          if (pos) {
+            node.x = pos.x;
+            node.y = pos.y;
+            node.vx = pos.vx;
+            node.vy = pos.vy;
+          }
+        });
 
-        // Color scale for node types
-        const nodeColors = {
-            "Nation": "#60a5fa",
-            "Corporation": "#f87171",
-            "RawMaterial": "#4ade80",
-            "Industry": "#fbbf24",
-            "Product": "#a78bfa",
-            "Crop": "#fb923c"
-        };
+        currentData = data;
 
-        // Link color based on status
-        const linkColors = {
-            "Strong": "#4ade80",
-            "Active": "#60a5fa",
-            "Weak": "#fbbf24",
-            "Blocked": "#f87171"
-        };
+        // Remove old elements
+        g.selectAll(".link").remove();
+        g.selectAll(".link-label").remove();
+        g.selectAll(".node").remove();
 
-        // Force simulation
-        const simulation = d3.forceSimulation()
-            .force("link", d3.forceLink().id(d => d.id).distance(150))
-            .force("charge", d3.forceManyBody().strength(-400))
-            .force("center", d3.forceCenter(width / 2, height / 2))
-            .force("collision", d3.forceCollide().radius(30));
+        // Create links
+        link = g
+          .append("g")
+          .selectAll(".link")
+          .data(data.links)
+          .join("line")
+          .attr("class", "link")
+          .attr("stroke", (d) => linkColors[d.status] || "#666")
+          .attr("stroke-width", (d) => Math.max(1, d.weight * 3));
 
-        let link, linkLabel, node, nodeLabel;
-        let currentData = { nodes: [], links: [] };
-        let nodePositions = new Map(); // Store node positions to preserve them
+        // Create link labels
+        linkLabel = g
+          .append("g")
+          .selectAll(".link-label")
+          .data(data.links)
+          .join("text")
+          .attr("class", "link-label")
+          .text((d) => `${d.type} (${d.weight.toFixed(2)})`);
 
-        // WebSocket handlers
-        ws.onopen = () => {
-            statusDiv.textContent = "Connected";
-            statusDiv.className = "connected";
-            addLog("sys", "Connected to Margraf Stream");
-            // Request initial graph data and companies list
-            ws.send(JSON.stringify({ type: "get_full_graph", payload: {} }));
-            ws.send(JSON.stringify({ type: "get_companies_list", payload: {} }));
-        };
+        // Create nodes
+        const nodeGroup = g
+          .append("g")
+          .selectAll(".node")
+          .data(data.nodes)
+          .join("g")
+          .attr("class", "node")
+          .call(drag(simulation));
 
-        ws.onclose = () => {
-            statusDiv.textContent = "Disconnected";
-            statusDiv.className = "disconnected";
-            addLog("sys", "Connection lost");
-        };
+        nodeGroup
+          .append("circle")
+          .attr("r", (d) => {
+            const baseRadius = 12;
+            return baseRadius * d.health;
+          })
+          .attr("fill", (d) => nodeColors[d.type] || "#999")
+          .attr("opacity", 0.9);
 
-        ws.onmessage = (event) => {
-            const msg = JSON.parse(event.data);
+        nodeGroup
+          .append("text")
+          .attr("dx", 15)
+          .attr("dy", 4)
+          .text((d) => d.name)
+          .attr("fill", "#e0e0e0");
 
-            if (msg.type === "graph_update") {
-                updateGraph(JSON.parse(msg.payload));
-            } else if (msg.type === "system") {
-                addLog("sys", msg.payload);
-            } else if (msg.type === "news_alert") {
-                addLog("news", "📰 " + msg.payload);
-            } else if (msg.type === "social_pulse") {
-                const p = msg.payload;
-                addLog("social", `🌐 ${p.platform}: ${p.user} (Sentiment: ${p.sentiment.toFixed(2)})`);
-            } else if (msg.type === "market_update") {
-                const p = msg.payload;
-                addLog("market", `📈 ${p.id}: $${p.price.toFixed(2)} ${p.currency} (Health: ${p.health.toFixed(2)})`);
-            } else if (msg.type === "company_relations") {
-                displayCompanyRelations(JSON.parse(msg.payload));
-            } else if (msg.type === "companies_list") {
-                updateCompanySearchResults(JSON.parse(msg.payload));
-            } else if (msg.type === "error") {
-                addLog("info", "Error: " + msg.payload);
-            } else {
-                addLog("info", JSON.stringify(msg));
-            }
-        };
-
-        function updateGraph(data) {
-            // Update statistics
-            document.getElementById("node-count").textContent = data.nodes.length;
-            document.getElementById("edge-count").textContent = data.links.length;
-            document.getElementById("last-update").textContent = new Date().toLocaleTimeString();
-
-            // Check if data has actually changed
-            if (JSON.stringify(currentData) === JSON.stringify(data)) {
-                return; // No changes, skip update
-            }
-
-            // Preserve existing node positions
-            if (simulation.nodes().length > 0) {
-                simulation.nodes().forEach(node => {
-                    nodePositions.set(node.id, { x: node.x, y: node.y, vx: node.vx, vy: node.vy });
-                });
-            }
-
-            // Restore positions for existing nodes
-            data.nodes.forEach(node => {
-                const pos = nodePositions.get(node.id);
-                if (pos) {
-                    node.x = pos.x;
-                    node.y = pos.y;
-                    node.vx = pos.vx;
-                    node.vy = pos.vy;
-                }
-            });
-
-            currentData = data;
-
-            // Remove old elements
-            g.selectAll(".link").remove();
-            g.selectAll(".link-label").remove();
-            g.selectAll(".node").remove();
-
-            // Create links
-            link = g.append("g")
-                .selectAll(".link")
-                .data(data.links)
-                .join("line")
-                .attr("class", "link")
-                .attr("stroke", d => linkColors[d.status] || "#666")
-                .attr("stroke-width", d => Math.max(1, d.weight * 3));
-
-            // Create link labels
-            linkLabel = g.append("g")
-                .selectAll(".link-label")
-                .data(data.links)
-                .join("text")
-                .attr("class", "link-label")
-                .text(d => `${d.type} (${d.weight.toFixed(2)})`);
-
-            // Create nodes
-            const nodeGroup = g.append("g")
-                .selectAll(".node")
-                .data(data.nodes)
-                .join("g")
-                .attr("class", "node")
-                .call(drag(simulation));
-
-            nodeGroup.append("circle")
-                .attr("r", d => {
-                    const baseRadius = 12;
-                    return baseRadius * d.health;
-                })
-                .attr("fill", d => nodeColors[d.type] || "#999")
-                .attr("opacity", 0.9);
-
-            nodeGroup.append("text")
-                .attr("dx", 15)
-                .attr("dy", 4)
-                .text(d => d.name)
-                .attr("fill", "#e0e0e0");
-
-            // Tooltip handlers
-            nodeGroup.on("mouseenter", (event, d) => {
-                const tooltipHTML = `
+        // Tooltip handlers
+        nodeGroup.on("mouseenter", (event, d) => {
+          const tooltipHTML = `
                     <strong>${d.name}</strong><br>
                     Type: ${d.type}<br>
                     Health: ${d.health.toFixed(2)}<br>
-                    ${d.price ? `Price: $${d.price.toFixed(2)}<br>` : ''}
-                    ${d.ticker ? `Ticker: ${d.ticker}` : ''}
+                    ${d.price ? `Price: $${d.price.toFixed(2)}<br>` : ""}
+                    ${d.ticker ? `Ticker: ${d.ticker}` : ""}
                 `;
-                tooltip.innerHTML = tooltipHTML;
-                tooltip.style.opacity = 1;
-                tooltip.style.left = (event.pageX + 10) + "px";
-                tooltip.style.top = (event.pageY - 10) + "px";
-            });
-
-            nodeGroup.on("mousemove", (event) => {
-                tooltip.style.left = (event.pageX + 10) + "px";
-                tooltip.style.top = (event.pageY - 10) + "px";
-            });
-
-            nodeGroup.on("mouseleave", () => {
-                tooltip.style.opacity = 0;
-            });
-
-            nodeGroup.on("click", (event, d) => {
-                if (d.type === "Corporation") {
-                    requestCompanyRelations(d.id);
-                }
-            });
-
-            node = nodeGroup;
-
-            // Update simulation
-            simulation.nodes(data.nodes);
-            simulation.force("link").links(data.links);
-
-            // Only restart with low alpha if this is an update, not initial load
-            const isInitialLoad = nodePositions.size === 0;
-            simulation.alpha(isInitialLoad ? 0.5 : 0.1).restart();
-
-            simulation.on("tick", () => {
-                link
-                    .attr("x1", d => d.source.x)
-                    .attr("y1", d => d.source.y)
-                    .attr("x2", d => d.target.x)
-                    .attr("y2", d => d.target.y);
-
-                linkLabel
-                    .attr("x", d => (d.source.x + d.target.x) / 2)
-                    .attr("y", d => (d.source.y + d.target.y) / 2);
-
-                node
-                    .attr("transform", d => `translate(${d.x},${d.y})`);
-            });
-        }
-
-        function drag(simulation) {
-            function dragstarted(event) {
-                if (!event.active) simulation.alphaTarget(0.3).restart();
-                event.subject.fx = event.subject.x;
-                event.subject.fy = event.subject.y;
-            }
-
-            function dragged(event) {
-                event.subject.fx = event.x;
-                event.subject.fy = event.y;
-            }
-
-            function dragended(event) {
-                if (!event.active) simulation.alphaTarget(0);
-                event.subject.fx = null;
-                event.subject.fy = null;
-            }
-
-            return d3.drag()
-                .on("start", dragstarted)
-                .on("drag", dragged)
-                .on("end", dragended);
-        }
-
-        function addLog(type, text) {
-            const div = document.createElement("div");
-            div.className = "log-entry";
-            const timestamp = new Date().toLocaleTimeString();
-            div.innerHTML = `<span class="log-type log-${type}">[${type.toUpperCase()}]</span> <span style="color:#666">${timestamp}</span> ${text}`;
-            logDiv.insertBefore(div, logDiv.firstChild);
-
-            // Keep only last 100 logs
-            while (logDiv.children.length > 100) {
-                logDiv.removeChild(logDiv.lastChild);
-            }
-        }
-
-        // Handle window resize
-        window.addEventListener("resize", () => {
-            const newWidth = window.innerWidth;
-            const newHeight = window.innerHeight * 0.8 - 48;
-            svg.attr("width", newWidth).attr("height", newHeight);
-            simulation.force("center", d3.forceCenter(newWidth / 2, newHeight / 2));
-            simulation.alpha(0.3).restart();
+          tooltip.innerHTML = tooltipHTML;
+          tooltip.style.opacity = 1;
+          tooltip.style.left = event.pageX + 10 + "px";
+          tooltip.style.top = event.pageY - 10 + "px";
         });
 
-        // Company panel functions
-        let companiesData = [];
+        nodeGroup.on("mousemove", (event) => {
+          tooltip.style.left = event.pageX + 10 + "px";
+          tooltip.style.top = event.pageY - 10 + "px";
+        });
 
-        function requestCompanyRelations(companyId) {
-            const msg = {
-                type: "get_company_relations",
-                payload: {
-                    company_id: companyId
-                }
-            };
-            ws.send(JSON.stringify(msg));
-            document.getElementById("company-panel").classList.add("visible");
+        nodeGroup.on("mouseleave", () => {
+          tooltip.style.opacity = 0;
+        });
+
+        nodeGroup.on("click", (event, d) => {
+          if (d.type === "Corporation") {
+            requestCompanyRelations(d.id);
+          }
+        });
+
+        node = nodeGroup;
+
+        // Update simulation
+        simulation.nodes(data.nodes);
+        simulation.force("link").links(data.links);
+
+        // Only restart with low alpha if this is an update, not initial load
+        const isInitialLoad = nodePositions.size === 0;
+        simulation.alpha(isInitialLoad ? 0.5 : 0.1).restart();
+
+        simulation.on("tick", () => {
+          link
+            .attr("x1", (d) => d.source.x)
+            .attr("y1", (d) => d.source.y)
+            .attr("x2", (d) => d.target.x)
+            .attr("y2", (d) => d.target.y);
+
+          linkLabel
+            .attr("x", (d) => (d.source.x + d.target.x) / 2)
+            .attr("y", (d) => (d.source.y + d.target.y) / 2);
+
+          node.attr("transform", (d) => `translate(${d.x},${d.y})`);
+        });
+      }
+
+      function drag(simulation) {
+        function dragstarted(event) {
+          if (!event.active) simulation.alphaTarget(0.3).restart();
+          event.subject.fx = event.subject.x;
+          event.subject.fy = event.subject.y;
         }
 
-        function closeCompanyPanel() {
-            document.getElementById("company-panel").classList.remove("visible");
+        function dragged(event) {
+          event.subject.fx = event.x;
+          event.subject.fy = event.y;
         }
 
-        function displayCompanyRelations(relations) {
-            const detailsDiv = document.getElementById("company-details");
+        function dragended(event) {
+          if (!event.active) simulation.alphaTarget(0);
+          event.subject.fx = null;
+          event.subject.fy = null;
+        }
 
-            let html = `
+        return d3
+          .drag()
+          .on("start", dragstarted)
+          .on("drag", dragged)
+          .on("end", dragended);
+      }
+
+      function addLog(type, text) {
+        const div = document.createElement("div");
+        div.className = "log-entry";
+        const timestamp = new Date().toLocaleTimeString();
+        div.innerHTML = `<span class="log-type log-${type}">[${type.toUpperCase()}]</span> <span style="color:#666">${timestamp}</span> ${text}`;
+        logDiv.insertBefore(div, logDiv.firstChild);
+
+        // Keep only last 100 logs
+        while (logDiv.children.length > 100) {
+          logDiv.removeChild(logDiv.lastChild);
+        }
+      }
+
+      // Handle window resize
+      window.addEventListener("resize", () => {
+        const newWidth = window.innerWidth;
+        const newHeight = window.innerHeight * 0.8 - 48;
+        svg.attr("width", newWidth).attr("height", newHeight);
+        simulation.force("center", d3.forceCenter(newWidth / 2, newHeight / 2));
+        simulation.alpha(0.3).restart();
+      });
+
+      // Company panel functions
+      let companiesData = [];
+
+      function requestCompanyRelations(companyId) {
+        const msg = {
+          type: "get_company_relations",
+          payload: {
+            company_id: companyId,
+          },
+        };
+        ws.send(JSON.stringify(msg));
+        document.getElementById("company-panel").classList.add("visible");
+      }
+
+      function closeCompanyPanel() {
+        document.getElementById("company-panel").classList.remove("visible");
+      }
+
+      function displayCompanyRelations(relations) {
+        const detailsDiv = document.getElementById("company-details");
+
+        let html = `
                 <div class="company-info">
                     <div class="name">${relations.company_name}</div>
                     <div class="id">ID: ${relations.company_id}</div>
                 </div>
             `;
 
-            // Suppliers
-            html += `<div class="section-title">Suppliers (${relations.suppliers ? relations.suppliers.length : 0})</div>`;
-            if (relations.suppliers && relations.suppliers.length > 0) {
-                html += '<ul class="relation-list">';
-                relations.suppliers.forEach(supplier => {
-                    html += `
+        // Suppliers
+        html += `<div class="section-title">Suppliers (${
+          relations.suppliers ? relations.suppliers.length : 0
+        })</div>`;
+        if (relations.suppliers && relations.suppliers.length > 0) {
+          html += '<ul class="relation-list">';
+          relations.suppliers.forEach((supplier) => {
+            html += `
                         <li class="relation-item">
                             <div class="name">${supplier.name}</div>
-                            <div class="meta">Health: ${supplier.health.toFixed(2)}</div>
+                            <div class="meta">Health: ${supplier.health.toFixed(
+                              2
+                            )}</div>
                         </li>
                     `;
-                });
-                html += '</ul>';
-            } else {
-                html += '<div class="no-data">No suppliers found</div>';
-            }
+          });
+          html += "</ul>";
+        } else {
+          html += '<div class="no-data">No suppliers found</div>';
+        }
 
-            // Clients
-            html += `<div class="section-title">Clients (${relations.clients ? relations.clients.length : 0})</div>`;
-            if (relations.clients && relations.clients.length > 0) {
-                html += '<ul class="relation-list">';
-                relations.clients.forEach(client => {
-                    html += `
+        // Clients
+        html += `<div class="section-title">Clients (${
+          relations.clients ? relations.clients.length : 0
+        })</div>`;
+        if (relations.clients && relations.clients.length > 0) {
+          html += '<ul class="relation-list">';
+          relations.clients.forEach((client) => {
+            html += `
                         <li class="relation-item">
                             <div class="name">${client.name}</div>
-                            <div class="meta">Health: ${client.health.toFixed(2)}</div>
+                            <div class="meta">Health: ${client.health.toFixed(
+                              2
+                            )}</div>
                         </li>
                     `;
-                });
-                html += '</ul>';
-            } else {
-                html += '<div class="no-data">No clients found</div>';
-            }
+          });
+          html += "</ul>";
+        } else {
+          html += '<div class="no-data">No clients found</div>';
+        }
 
-            // Raw Materials
-            html += `<div class="section-title">Raw Materials (${relations.raw_materials ? relations.raw_materials.length : 0})</div>`;
-            if (relations.raw_materials && relations.raw_materials.length > 0) {
-                html += '<ul class="relation-list">';
-                relations.raw_materials.forEach(material => {
-                    html += `
+        // Raw Materials
+        html += `<div class="section-title">Raw Materials (${
+          relations.raw_materials ? relations.raw_materials.length : 0
+        })</div>`;
+        if (relations.raw_materials && relations.raw_materials.length > 0) {
+          html += '<ul class="relation-list">';
+          relations.raw_materials.forEach((material) => {
+            html += `
                         <li class="relation-item">
                             <div class="name">${material.name}</div>
-                            <div class="meta">Type: ${material.type} | Health: ${material.health.toFixed(2)}</div>
+                            <div class="meta">Type: ${
+                              material.type
+                            } | Health: ${material.health.toFixed(2)}</div>
                         </li>
                     `;
-                });
-                html += '</ul>';
-            } else {
-                html += '<div class="no-data">No raw materials found</div>';
-            }
+          });
+          html += "</ul>";
+        } else {
+          html += '<div class="no-data">No raw materials found</div>';
+        }
 
-            // Products
-            html += `<div class="section-title">Products (${relations.products ? relations.products.length : 0})</div>`;
-            if (relations.products && relations.products.length > 0) {
-                html += '<ul class="relation-list">';
-                relations.products.forEach(product => {
-                    html += `
+        // Products
+        html += `<div class="section-title">Products (${
+          relations.products ? relations.products.length : 0
+        })</div>`;
+        if (relations.products && relations.products.length > 0) {
+          html += '<ul class="relation-list">';
+          relations.products.forEach((product) => {
+            html += `
                         <li class="relation-item">
                             <div class="name">${product.name}</div>
-                            <div class="meta">Health: ${product.health.toFixed(2)}</div>
+                            <div class="meta">Health: ${product.health.toFixed(
+                              2
+                            )}</div>
                         </li>
                     `;
-                });
-                html += '</ul>';
-            } else {
-                html += '<div class="no-data">No products found</div>';
-            }
-
-            detailsDiv.innerHTML = html;
+          });
+          html += "</ul>";
+        } else {
+          html += '<div class="no-data">No products found</div>';
         }
 
-        function updateCompanySearchResults(companies) {
-            companiesData = companies;
-        }
+        detailsDiv.innerHTML = html;
+      }
 
-        // Company search functionality
-        let searchTimeout;
-        document.getElementById("company-search-input").addEventListener("input", (e) => {
-            clearTimeout(searchTimeout);
-            const query = e.target.value.toLowerCase();
+      function updateCompanySearchResults(companies) {
+        companiesData = companies;
+      }
 
-            if (query.length === 0) {
-                return;
+      // Company search functionality
+      let searchTimeout;
+      document
+        .getElementById("company-search-input")
+        .addEventListener("input", (e) => {
+          clearTimeout(searchTimeout);
+          const query = e.target.value.toLowerCase();
+
+          if (query.length === 0) {
+            return;
+          }
+
+          // Request companies list if not already loaded
+          if (companiesData.length === 0) {
+            ws.send(
+              JSON.stringify({ type: "get_companies_list", payload: {} })
+            );
+          }
+
+          // Filter and display matching companies
+          searchTimeout = setTimeout(() => {
+            const matches = companiesData.filter(
+              (c) =>
+                c.name.toLowerCase().includes(query) ||
+                c.id.toLowerCase().includes(query)
+            );
+
+            if (matches.length > 0 && query.length > 0) {
+              // Auto-select first match if only one result
+              if (matches.length === 1) {
+                requestCompanyRelations(matches[0].id);
+              }
             }
-
-            // Request companies list if not already loaded
-            if (companiesData.length === 0) {
-                ws.send(JSON.stringify({ type: "get_companies_list", payload: {} }));
-            }
-
-            // Filter and display matching companies
-            searchTimeout = setTimeout(() => {
-                const matches = companiesData.filter(c =>
-                    c.name.toLowerCase().includes(query) || c.id.toLowerCase().includes(query)
-                );
-
-                if (matches.length > 0 && query.length > 0) {
-                    // Auto-select first match if only one result
-                    if (matches.length === 1) {
-                        requestCompanyRelations(matches[0].id);
-                    }
-                }
-            }, 300);
+          }, 300);
         });
     </script>
-</body>
+  </body>
 </html>

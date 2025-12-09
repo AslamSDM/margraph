@@ -37,10 +37,10 @@ const (
 	EdgeTypeDependsOn     EdgeType = "DependsOn"     // Company -> Supplier
 
 	// Supply Chain Directional Edges (for shock propagation)
-	EdgeTypeSupplies      EdgeType = "Supplies"      // Supplier -> Client (shocks flow downstream)
-	EdgeTypeProcuresFrom  EdgeType = "ProcuresFrom"  // Client -> Supplier (for reference, shocks flow reverse)
-	EdgeTypeManufactures  EdgeType = "Manufactures"  // Company -> Product
-	EdgeTypeConsumes      EdgeType = "Consumes"      // Company -> RawMaterial
+	EdgeTypeSupplies     EdgeType = "Supplies"     // Supplier -> Client (shocks flow downstream)
+	EdgeTypeProcuresFrom EdgeType = "ProcuresFrom" // Client -> Supplier (for reference, shocks flow reverse)
+	EdgeTypeManufactures EdgeType = "Manufactures" // Company -> Product
+	EdgeTypeConsumes     EdgeType = "Consumes"     // Company -> RawMaterial
 )
 
 // EdgeDirectionality defines how shocks propagate through edge types
@@ -59,33 +59,33 @@ const (
 
 // Node represents an entity in the economic ecosystem.
 type Node struct {
-	ID         string                 `json:"id"`
-	Type       NodeType               `json:"type"`
-	Name       string                 `json:"name"`
-	Health     float64                `json:"health"` // 1.0 = Normal, <1.0 = Stressed, >1.0 = Booming
-	Ticker     string                 `json:"ticker,omitempty"`
-	Price      float64                `json:"price,omitempty"`
-	Currency   string                 `json:"currency,omitempty"`
-	LastUpdated time.Time             `json:"last_updated,omitempty"`
-	Attributes map[string]interface{} `json:"attributes"`
+	ID          string                 `json:"id"`
+	Type        NodeType               `json:"type"`
+	Name        string                 `json:"name"`
+	Health      float64                `json:"health"` // 1.0 = Normal, <1.0 = Stressed, >1.0 = Booming
+	Ticker      string                 `json:"ticker,omitempty"`
+	Price       float64                `json:"price,omitempty"`
+	Currency    string                 `json:"currency,omitempty"`
+	LastUpdated time.Time              `json:"last_updated,omitempty"`
+	Attributes  map[string]interface{} `json:"attributes"`
 }
 
 // Edge represents a connection between two nodes.
 type Edge struct {
-	SourceID      string              `json:"source_id"`
-	TargetID      string              `json:"target_id"`
-	Type          EdgeType            `json:"type"`
-	Weight        float64             `json:"weight"`          // Represents strength, volume, or influence (0.0 to 1.0 or scalar)
-	Timestamp     time.Time           `json:"timestamp"`       // Temporal Knowledge Graph: Track when edge was created/updated
-	Status        string              `json:"status"`          // Active, Blocked, Suspended, etc.
+	SourceID       string             `json:"source_id"`
+	TargetID       string             `json:"target_id"`
+	Type           EdgeType           `json:"type"`
+	Weight         float64            `json:"weight"`         // Represents strength, volume, or influence (0.0 to 1.0 or scalar)
+	Timestamp      time.Time          `json:"timestamp"`      // Temporal Knowledge Graph: Track when edge was created/updated
+	Status         string             `json:"status"`         // Active, Blocked, Suspended, etc.
 	Directionality EdgeDirectionality `json:"directionality"` // How shocks propagate through this edge
 }
 
 // EdgeHistory tracks the temporal evolution of a relationship
 type EdgeHistory struct {
-	SourceID string      `json:"source_id"`
-	TargetID string      `json:"target_id"`
-	Type     EdgeType    `json:"type"`
+	SourceID string         `json:"source_id"`
+	TargetID string         `json:"target_id"`
+	Type     EdgeType       `json:"type"`
 	History  []EdgeSnapshot `json:"history"`
 }
 
@@ -99,14 +99,14 @@ type EdgeSnapshot struct {
 
 // Graph represents the FDKG (Financial Dynamic Knowledge Graph).
 type Graph struct {
-	Nodes        map[string]*Node          `json:"nodes"`
-	Edges        []*Edge                   `json:"edges"`
-	EdgeHistories map[string]*EdgeHistory   `json:"edge_histories"` // Key: "srcID|tgtID|type"
-	Adjacency    map[string][]*Edge        `json:"-"` // Cache for O(1) lookup, ignored in JSON
-	mu           sync.RWMutex
+	Nodes         map[string]*Node        `json:"nodes"`
+	Edges         []*Edge                 `json:"edges"`
+	EdgeHistories map[string]*EdgeHistory `json:"edge_histories"` // Key: "srcID|tgtID|type"
+	Adjacency     map[string][]*Edge      `json:"-"`              // Cache for O(1) lookup, ignored in JSON
+	mu            sync.RWMutex
 
 	// Auto-save configuration
-	autoSavePath    string
+	autoSavePath         string
 	changesSinceLastSave int
 	autoSaveThreshold    int // Save after N changes
 }
@@ -168,13 +168,13 @@ func (g *Graph) AddNode(n *Node) {
 func (g *Graph) Clear() {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	
+
 	g.Nodes = make(map[string]*Node)
 	g.Edges = make([]*Edge, 0)
 	g.EdgeHistories = make(map[string]*EdgeHistory)
 	g.Adjacency = make(map[string][]*Edge)
 	g.changesSinceLastSave = 0
-	
+
 	logger.Info(logger.StatusInit, "Graph cleared")
 }
 
@@ -192,8 +192,12 @@ func (g *Graph) UpdateNodeHealth(id string, delta float64) (float64, bool) {
 	node.Health += delta
 
 	// Clamp health reasonable bounds (e.g., 0.1 to 2.0)
-	if node.Health < 0.1 { node.Health = 0.1 }
-	if node.Health > 2.0 { node.Health = 2.0 }
+	if node.Health < 0.1 {
+		node.Health = 0.1
+	}
+	if node.Health > 2.0 {
+		node.Health = 2.0
+	}
 
 	return node.Health, true
 }
@@ -334,7 +338,7 @@ func (g *Graph) UpdateEdgeWeight(sourceID, targetID string, edgeType EdgeType, s
 
 	// Calculate time since last update (for decay)
 	timeSinceUpdate := time.Since(targetEdge.Timestamp).Hours() / 24.0 // Convert to days
-	lambda := 0.05 // Decay rate (5% per day) - configurable in production
+	lambda := 0.05                                                     // Decay rate (5% per day) - configurable in production
 
 	// Apply decay: W_old * e^(-λ * t)
 	// Using Taylor series approximation for e^x: e^x ≈ 1 + x + x²/2! + x³/3! + ...
@@ -398,7 +402,7 @@ func (g *Graph) GetOutgoingEdges(id string) []*Edge {
 func (g *Graph) GetIncomingEdges(id string) []*Edge {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
-	
+
 	result := make([]*Edge, 0)
 	for _, edge := range g.Edges {
 		if edge.TargetID == id {
@@ -613,12 +617,12 @@ func (g *Graph) StartTemporalDecayWorker(interval time.Duration, lambda float64)
 
 // CompanyRelations holds all relationships for a company
 type CompanyRelations struct {
-	CompanyID    string   `json:"company_id"`
-	CompanyName  string   `json:"company_name"`
-	Suppliers    []*Node  `json:"suppliers"`
-	Clients      []*Node  `json:"clients"`
-	RawMaterials []*Node  `json:"raw_materials"`
-	Products     []*Node  `json:"products"`
+	CompanyID    string  `json:"company_id"`
+	CompanyName  string  `json:"company_name"`
+	Suppliers    []*Node `json:"suppliers"`
+	Clients      []*Node `json:"clients"`
+	RawMaterials []*Node `json:"raw_materials"`
+	Products     []*Node `json:"products"`
 }
 
 // GetSuppliers returns all companies that supply to the given company

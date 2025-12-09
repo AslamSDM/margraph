@@ -64,8 +64,8 @@ func (h *Hub) Broadcast(msgType string, payload interface{}) {
 
 // IncomingMessage represents a message from the client
 type IncomingMessage struct {
-	Type      string                 `json:"type"`
-	Payload   map[string]interface{} `json:"payload"`
+	Type    string                 `json:"type"`
+	Payload map[string]interface{} `json:"payload"`
 }
 
 func (h *Hub) HandleWebSocket(w http.ResponseWriter, r *http.Request) {

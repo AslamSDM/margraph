@@ -14,13 +14,13 @@ import (
 )
 
 type Seeder struct {
-	Client        *llm.Client
-	MarketScraper *scraper.MarketScraper
-	WebSearcher   *scraper.WebSearcher
-	ComtradeClient *datasources.ComtradeClient
+	Client          *llm.Client
+	MarketScraper   *scraper.MarketScraper
+	WebSearcher     *scraper.WebSearcher
+	ComtradeClient  *datasources.ComtradeClient
 	WorldBankClient *datasources.WorldBankClient
-	visited       map[string]bool
-	mu            sync.Mutex
+	visited         map[string]bool
+	mu              sync.Mutex
 }
 
 func NewSeeder(client *llm.Client) *Seeder {
@@ -215,26 +215,26 @@ func (s *Seeder) validateRelationship(source, target, product string) (bool, err
 		// Silently trust if search fails - no need to warn
 		return true, nil
 	}
-	
+
 	if len(results) == 0 {
 		return false, nil
 	}
-	
+
 	// Check for keywords in snippets
 	keywords := []string{"export", "trade", "sell", "supply", "deal", "import", "relation", "partner", "billion", "million"}
 	hits := 0
-	
+
 	sourceLower := strings.ToLower(source)
 	targetLower := strings.ToLower(target)
-	
+
 	for _, res := range results {
 		text := strings.ToLower(res.Title + " " + res.Snippet)
-		
+
 		// Must mention both entities (roughly)
 		if !strings.Contains(text, sourceLower) && !strings.Contains(text, targetLower) {
 			continue
 		}
-		
+
 		for _, kw := range keywords {
 			if strings.Contains(text, kw) {
 				hits++
@@ -242,7 +242,7 @@ func (s *Seeder) validateRelationship(source, target, product string) (bool, err
 			}
 		}
 	}
-	
+
 	if hits > 0 {
 		return true, nil
 	}
@@ -252,7 +252,7 @@ func (s *Seeder) validateRelationship(source, target, product string) (bool, err
 // ProcessNation adds a nation, finds its industries
 func (s *Seeder) ProcessNation(g *graph.Graph, name string, depth int) error {
 	id := cleanID(name)
-	
+
 	if s.isVisited(id) {
 		return nil
 	}
@@ -337,6 +337,9 @@ Return ONLY a JSON array of strings, e.g. ["Company A", "Company B"].
 		g.AddNode(&graph.Node{ID: compID, Type: graph.NodeTypeCorporation, Name: comp})
 		g.AddEdge(&graph.Edge{SourceID: indID, TargetID: compID, Type: graph.EdgeTypeHasCompany, Weight: 1.0})
 		logger.InfoDepth(3, logger.StatusCor, "Added Company: %s", comp)
+
+		// Discover supplier/client relationships for this company
+		go s.discoverCompanyRelations(g, comp, compID, industryName, depth)
 	}
 
 	// 2. Find Raw Materials
@@ -354,7 +357,7 @@ Return ONLY a JSON array of strings, e.g. ["Company A", "Company B"].
 // processMaterial adds material, links to industry, finds top producers (recursion)
 func (s *Seeder) processMaterial(g *graph.Graph, matName, industryNodeID string, depth int) error {
 	matID := cleanID(matName)
-	
+
 	// Add Material Node (idempotent check done by AddNode usually, but we might want to ensure it exists)
 	if _, exists := g.GetNode(matID); !exists {
 		g.AddNode(&graph.Node{ID: matID, Type: graph.NodeTypeRawMaterial, Name: matName})
@@ -375,7 +378,7 @@ func (s *Seeder) processMaterial(g *graph.Graph, matName, industryNodeID string,
 
 	for _, producerName := range producers {
 		prodID := cleanID(producerName)
-		
+
 		// Recursively process this nation
 		// We rely on s.visited to stop infinite loops if we've already seen this nation
 		if !s.isVisited(prodID) {
@@ -415,7 +418,7 @@ func (s *Seeder) fetchList(prompt string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	
+
 	cleaned := cleanJSON(resp)
 	var list []string
 	if err := json.Unmarshal([]byte(cleaned), &list); err != nil {
@@ -466,11 +469,11 @@ func (s *Seeder) validateEntity(name, category string) (bool, error) {
 	// Or do we see keywords?
 	hitCount := 0
 	nameLower := strings.ToLower(name)
-	
+
 	for _, res := range results {
 		titleLower := strings.ToLower(res.Title)
 		snippetLower := strings.ToLower(res.Snippet)
-		
+
 		if strings.Contains(titleLower, nameLower) || strings.Contains(snippetLower, nameLower) {
 			hitCount++
 		}
@@ -495,4 +498,286 @@ func cleanJSON(s string) string {
 
 func cleanID(s string) string {
 	return strings.ToLower(strings.ReplaceAll(s, " ", "_"))
+}
+
+// extractCompaniesFromSearchResults extracts company names from search results
+func (s *Seeder) extractCompaniesFromSearchResults(results []scraper.SearchResult, excludeCompany, relationType string) []string {
+	companies := make([]string, 0)
+	companySet := make(map[string]bool)
+
+	// Common patterns that indicate company names
+	// Look for: "Company Name Inc", "Company Corp", "Company Ltd", etc.
+	companyIndicators := []string{
+		"Inc", "Corp", "Corporation", "Ltd", "Limited", "LLC", "Co.",
+		"Group", "Holdings", "International", "Technologies", "Systems",
+	}
+
+	for _, result := range results {
+		text := result.Title + " " + result.Snippet
+		words := strings.Fields(text)
+
+		// Simple heuristic: look for capitalized sequences that might be company names
+		for i := 0; i < len(words); i++ {
+			// Skip if word is too short or is the excluded company
+			if len(words[i]) < 3 {
+				continue
+			}
+
+			// Check if this looks like start of a company name (capitalized)
+			if words[i][0] >= 'A' && words[i][0] <= 'Z' {
+				possibleName := words[i]
+
+				// Look ahead for multi-word company names (up to 3 words)
+				for j := i + 1; j < len(words) && j < i+3; j++ {
+					nextWord := words[j]
+
+					// Stop if we hit common non-company words
+					if strings.ToLower(nextWord) == "the" || strings.ToLower(nextWord) == "a" ||
+						strings.ToLower(nextWord) == "and" || strings.ToLower(nextWord) == "of" {
+						break
+					}
+
+					// If next word is capitalized or a company indicator, add it
+					if (nextWord[0] >= 'A' && nextWord[0] <= 'Z') || containsAny(nextWord, companyIndicators) {
+						possibleName += " " + nextWord
+
+						// If we found a company indicator, this is likely a complete company name
+						if containsAny(nextWord, companyIndicators) {
+							break
+						}
+					} else {
+						break
+					}
+				}
+
+				// Clean and validate the company name
+				possibleName = strings.TrimSpace(possibleName)
+				possibleName = strings.Trim(possibleName, ".,;:()[]{}\"'")
+
+				// Only add if it's not too short, not the excluded company, and not already added
+				if len(possibleName) >= 3 &&
+					!strings.Contains(strings.ToLower(possibleName), strings.ToLower(excludeCompany)) &&
+					!companySet[possibleName] {
+
+					companySet[possibleName] = true
+					companies = append(companies, possibleName)
+				}
+			}
+		}
+	}
+
+	return companies
+}
+
+// containsAny checks if string contains any of the substrings
+func containsAny(s string, substrings []string) bool {
+	for _, substr := range substrings {
+		if strings.Contains(s, substr) {
+			return true
+		}
+	}
+	return false
+}
+
+// contains checks if a string slice contains a string (case-insensitive)
+func contains(slice []string, item string) bool {
+	itemLower := strings.ToLower(item)
+	for _, s := range slice {
+		if strings.ToLower(s) == itemLower {
+			return true
+		}
+	}
+	return false
+}
+
+// discoverCompanyRelations discovers and adds supplier/client relationships for a company
+func (s *Seeder) discoverCompanyRelations(g *graph.Graph, companyName, companyID, industryName string, depth int) {
+	// Don't go too deep to avoid infinite recursion
+	if depth > config.Global.Scraping.SearchDepth {
+		return
+	}
+
+	logger.InfoDepth(4, logger.StatusChk, "Discovering relations for %s...", companyName)
+
+	var relations struct {
+		Suppliers []string `json:"suppliers"`
+		Clients   []string `json:"clients"`
+	}
+
+	// Strategy 1: Web search for supplier relationships
+	suppliersQuery := fmt.Sprintf("%s suppliers major partners procurement", companyName)
+	suppliersResults, err := s.WebSearcher.Search(suppliersQuery)
+
+	if err == nil && len(suppliersResults) > 0 {
+		// Extract company names from search results
+		suppliers := s.extractCompaniesFromSearchResults(suppliersResults, companyName, "supplier")
+		relations.Suppliers = append(relations.Suppliers, suppliers...)
+
+		if len(suppliers) > 0 {
+			logger.InfoDepth(4, logger.StatusOK, "Found %d suppliers via web search", len(suppliers))
+		}
+	}
+
+	// Strategy 2: Web search for client/customer relationships
+	clientsQuery := fmt.Sprintf("%s customers clients major contracts partnerships", companyName)
+	clientsResults, err := s.WebSearcher.Search(clientsQuery)
+
+	if err == nil && len(clientsResults) > 0 {
+		// Extract company names from search results
+		clients := s.extractCompaniesFromSearchResults(clientsResults, companyName, "client")
+		relations.Clients = append(relations.Clients, clients...)
+
+		if len(clients) > 0 {
+			logger.InfoDepth(4, logger.StatusOK, "Found %d clients via web search", len(clients))
+		}
+	}
+
+	// Strategy 3: Use LLM with search context as RAG to supplement findings
+	logger.InfoDepth(4, logger.StatusChk, "Analyzing with LLM for additional relations...")
+
+	// Build context from all search results
+	var contextBuilder strings.Builder
+	contextBuilder.WriteString("Web search findings:\n")
+
+	if len(suppliersResults) > 0 {
+		contextBuilder.WriteString("\nSupplier-related information:\n")
+		for _, res := range suppliersResults {
+			contextBuilder.WriteString(fmt.Sprintf("- %s: %s\n", res.Title, res.Snippet))
+		}
+	}
+
+	if len(clientsResults) > 0 {
+		contextBuilder.WriteString("\nClient-related information:\n")
+		for _, res := range clientsResults {
+			contextBuilder.WriteString(fmt.Sprintf("- %s: %s\n", res.Title, res.Snippet))
+		}
+	}
+
+	// RAG prompt with web search context - no limits
+	prompt := fmt.Sprintf(`
+Based on the following web search results about "%s" in the %s industry, extract ALL company relationships you can find.
+
+%s
+
+Extract ALL suppliers and clients mentioned. Focus on extracting actual company names mentioned in the search results.
+
+Return ONLY a JSON object in this format:
+{
+  "suppliers": ["Company Name 1", "Company Name 2", ...],
+  "clients": ["Company Name 1", "Company Name 2", ...]
+}
+
+Include all companies explicitly mentioned in the search results. Return empty arrays if no clear relationships are found.
+`, companyName, industryName, contextBuilder.String())
+
+	resp, err := s.Client.Complete(prompt)
+	if err == nil {
+		cleaned := cleanJSON(resp)
+
+		var llmRelations struct {
+			Suppliers []string `json:"suppliers"`
+			Clients   []string `json:"clients"`
+		}
+
+		if err := json.Unmarshal([]byte(cleaned), &llmRelations); err == nil {
+			// Add LLM-found relations that we don't already have
+			for _, supplier := range llmRelations.Suppliers {
+				if supplier != "" && !contains(relations.Suppliers, supplier) {
+					relations.Suppliers = append(relations.Suppliers, supplier)
+				}
+			}
+			for _, client := range llmRelations.Clients {
+				if client != "" && !contains(relations.Clients, client) {
+					relations.Clients = append(relations.Clients, client)
+				}
+			}
+		}
+	}
+
+	// Add suppliers
+	for _, supplier := range relations.Suppliers {
+		if supplier == "" {
+			continue
+		}
+
+		supplierID := cleanID(supplier)
+
+		// Add supplier node if it doesn't exist
+		if _, exists := g.GetNode(supplierID); !exists {
+			g.AddNode(&graph.Node{
+				ID:   supplierID,
+				Type: graph.NodeTypeCorporation,
+				Name: supplier,
+			})
+			logger.InfoDepth(4, logger.StatusNew, "Added supplier: %s", supplier)
+		}
+
+		// Add Supplies edge (supplier -> company)
+		g.AddEdge(&graph.Edge{
+			SourceID:       supplierID,
+			TargetID:       companyID,
+			Type:           graph.EdgeTypeSupplies,
+			Weight:         0.7,
+			Status:         "Active",
+			Directionality: graph.DirectionalityUnidirectional,
+		})
+
+		// Add ProcuresFrom edge (company -> supplier)
+		g.AddEdge(&graph.Edge{
+			SourceID:       companyID,
+			TargetID:       supplierID,
+			Type:           graph.EdgeTypeProcuresFrom,
+			Weight:         0.7,
+			Status:         "Active",
+			Directionality: graph.DirectionalityReverse,
+		})
+
+		logger.SuccessDepth(4, "%s ← supplies ← %s", companyName, supplier)
+	}
+
+	// Add clients
+	for _, client := range relations.Clients {
+		if client == "" {
+			continue
+		}
+
+		clientID := cleanID(client)
+
+		// Add client node if it doesn't exist
+		if _, exists := g.GetNode(clientID); !exists {
+			g.AddNode(&graph.Node{
+				ID:   clientID,
+				Type: graph.NodeTypeCorporation,
+				Name: client,
+			})
+			logger.InfoDepth(4, logger.StatusNew, "Added client: %s", client)
+		}
+
+		// Add Supplies edge (company -> client)
+		g.AddEdge(&graph.Edge{
+			SourceID:       companyID,
+			TargetID:       clientID,
+			Type:           graph.EdgeTypeSupplies,
+			Weight:         0.7,
+			Status:         "Active",
+			Directionality: graph.DirectionalityUnidirectional,
+		})
+
+		// Add ProcuresFrom edge (client -> company)
+		g.AddEdge(&graph.Edge{
+			SourceID:       clientID,
+			TargetID:       companyID,
+			Type:           graph.EdgeTypeProcuresFrom,
+			Weight:         0.7,
+			Status:         "Active",
+			Directionality: graph.DirectionalityReverse,
+		})
+
+		logger.SuccessDepth(4, "%s → supplies → %s", companyName, client)
+	}
+
+	relationCount := len(relations.Suppliers) + len(relations.Clients)
+	if relationCount > 0 {
+		logger.SuccessDepth(4, "Discovered %d relations for %s", relationCount, companyName)
+	}
 }

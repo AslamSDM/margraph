@@ -130,24 +130,24 @@ func main() {
 	go func() {
 		// Wait a bit before starting expansion to let initial graph stabilize
 		time.Sleep(30 * time.Second)
-		
+
 		ticker := time.NewTicker(5 * time.Minute) // Expand every 5 minutes
 		defer ticker.Stop()
-		
+
 		for range ticker.C {
 			logger.Info(logger.StatusInit, "Running periodic graph expansion...")
-			
+
 			// Discover supply chain relationships
 			addedEdges := g.DiscoverSupplyChainRelations()
 			if addedEdges > 0 {
 				logger.Success("Discovered %d new supply chain relationships", addedEdges)
 			}
-			
+
 			// Expand a random underexplored nation
 			go func() {
 				var targetNode *graph.Node
 				minEdgeCount := 999
-				
+
 				// Find nation with fewest edges (underexplored)
 				g.NodesRange(func(n *graph.Node) {
 					if n.Type != graph.NodeTypeNation {
@@ -159,7 +159,7 @@ func main() {
 						targetNode = n
 					}
 				})
-				
+
 				if targetNode != nil {
 					logger.Info(logger.StatusChk, "Expanding underexplored nation: %s", targetNode.Name)
 					if err := seeder.ProcessNation(g, targetNode.Name, 0); err != nil {
@@ -332,12 +332,12 @@ func handleCommand(input string, g *graph.Graph, sim *simulation.Simulator, hub 
 	case "reseed":
 		logger.Warn(logger.StatusWarn, "WARNING: Reseeding will clear current graph and rebuild from scratch!")
 		logger.Info(logger.StatusInit, "Starting reseed process...")
-		
+
 		// Clear the graph safely
 		g.Clear()
-		
+
 		logger.Success("Graph cleared. Starting discovery...")
-		
+
 		// Run seeder in background
 		go func() {
 			client := llm.NewClient()

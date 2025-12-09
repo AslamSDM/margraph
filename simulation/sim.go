@@ -58,7 +58,7 @@ func (s *Simulator) RunShock(event ShockEvent) {
 	logger.InfoDepth(1, "", "Direct Impact on %s:", target.Name)
 
 	// Track propagation across multiple hops
-	activationMap := make(map[string]float64) // nodeID -> activation energy
+	activationMap := make(map[string]float64)                 // nodeID -> activation energy
 	activationMap[event.TargetNodeID] = 1.0 - effectiveImpact // Initial shock energy
 
 	// First-order propagation - respect edge directionality
@@ -85,7 +85,7 @@ func (s *Simulator) RunShock(event ShockEvent) {
 
 		// Actually update the edge weight in the graph
 		sentimentScore := -(1.0 - effectiveImpact) // Negative shock
-		relevanceScore := 1.0 // Direct connection = high relevance
+		relevanceScore := 1.0                      // Direct connection = high relevance
 		eventID := fmt.Sprintf("shock_%s_%d", event.TargetNodeID, len(activationMap))
 
 		if err := s.Graph.UpdateEdgeWeight(e.SourceID, e.TargetID, e.Type, sentimentScore, relevanceScore, eventID); err == nil {
