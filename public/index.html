@@ -452,6 +452,8 @@
             statusDiv.textContent = "Connected";
             statusDiv.className = "connected";
             addLog("sys", "Connected to Margraf Stream");
+            // Request initial graph data and companies list
+            ws.send(JSON.stringify({ type: "get_full_graph", payload: {} }));
             ws.send(JSON.stringify({ type: "get_companies_list", payload: {} }));
         };
 

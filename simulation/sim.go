@@ -160,7 +160,10 @@ func (s *Simulator) RunShock(event ShockEvent) {
 // identifyWinners finds nodes that benefit from the shock (substitutes, competitors).
 func (s *Simulator) identifyWinners(shockedNodeID string, winners *[]string) {
 	// Strategy 1: Find SUBSTITUTE_FOR edges pointing to the shocked node's products
-	shockedNode, _ := s.Graph.GetNode(shockedNodeID)
+	shockedNode, ok := s.Graph.GetNode(shockedNodeID)
+	if !ok {
+		return
+	}
 
 	// If it's a nation or produces commodities, find substitutes
 	if shockedNode.Type == graph.NodeTypeNation || shockedNode.Type == graph.NodeTypeRawMaterial {
@@ -174,17 +177,21 @@ func (s *Simulator) identifyWinners(shockedNodeID string, winners *[]string) {
 		}
 	}
 
-	// Strategy 2: Find direct competitors
-	s.Graph.NodesRange(func(n *graph.Node) {
-		if n.ID == shockedNodeID {
-			return
+	// Strategy 2: Find direct competitors via COMPETES_WITH edges only
+	// Don't add all nodes of the same type - that's too aggressive
+	s.Graph.EdgesRange(func(e *graph.Edge) {
+		if e.Type == graph.EdgeTypeCompetesWith {
+			if e.SourceID == shockedNodeID {
+				*winners = append(*winners, e.TargetID)
+			} else if e.TargetID == shockedNodeID {
+				*winners = append(*winners, e.SourceID)
+			}
 		}
-
-		// Same type and category = potential competitor benefiting from shock
-		if n.Type == shockedNode.Type {
-			// Check if there's a COMPETES_WITH edge (future enhancement)
-			// For now, assume nodes of same type in same industry benefit
-			*winners = append(*winners, n.ID)
+		// Also check SUBSTITUTE_FOR edges
+		if e.Type == graph.EdgeTypeSubstituteFor {
+			if e.TargetID == shockedNodeID {
+				*winners = append(*winners, e.SourceID)
+			}
 		}
 	})
 }
@@ -206,20 +213,21 @@ func (s *Simulator) findSubstitutes(commodityID string, winners *[]string) {
 func (s *Simulator) propagateReverseShocks(targetNodeID string, target *graph.Node, effectiveImpact float64, activationMap map[string]float64, impactedNodeIDs *[]string) {
 	// We need to check all edges in the graph where we are the TARGET
 	// and the edge has reverse directionality
-	for _, edge := range s.Graph.Edges {
+	// Use thread-safe edge iteration
+	s.Graph.EdgesRange(func(edge *graph.Edge) {
 		if edge.TargetID != targetNodeID {
-			continue
+			return
 		}
 
 		// Check if this is a reverse-direction edge
 		if !graph.ShouldPropagateShock(edge, false) {
-			continue
+			return
 		}
 
 		// Shock propagates backwards (from target to source)
 		upstream, ok := s.Graph.GetNode(edge.SourceID)
 		if !ok {
-			continue
+			return
 		}
 
 		propagationFactor := graph.GetShockPropagationFactor(edge.Type)
@@ -243,5 +251,5 @@ func (s *Simulator) propagateReverseShocks(targetNodeID string, target *graph.No
 
 			*impactedNodeIDs = append(*impactedNodeIDs, edge.SourceID)
 		}
-	}
+	})
 }

@@ -20,7 +20,7 @@ import (
 
 func main() {
 	loadEnv()
-	
+
 	if err := config.Load(); err != nil {
 		fmt.Printf("Error loading config: %v\n", err)
 		os.Exit(1)
@@ -112,7 +112,7 @@ func main() {
 
 	// 3. Setup simulator
 	sim := simulation.NewSimulator(g)
-	
+
 	// 4. Start Engines
 	newsEngine := news.NewEngine(g, client, seeder, sim, hub, socialMonitor)
 
@@ -125,7 +125,51 @@ func main() {
 
 	go newsEngine.Monitor(newsInterval)
 	go marketMonitor.Start(marketInterval)
-	
+
+	// Active Graph Expansion - Periodically discover new relationships and expand nodes
+	go func() {
+		// Wait a bit before starting expansion to let initial graph stabilize
+		time.Sleep(30 * time.Second)
+		
+		ticker := time.NewTicker(5 * time.Minute) // Expand every 5 minutes
+		defer ticker.Stop()
+		
+		for range ticker.C {
+			logger.Info(logger.StatusInit, "Running periodic graph expansion...")
+			
+			// Discover supply chain relationships
+			addedEdges := g.DiscoverSupplyChainRelations()
+			if addedEdges > 0 {
+				logger.Success("Discovered %d new supply chain relationships", addedEdges)
+			}
+			
+			// Expand a random underexplored nation
+			go func() {
+				var targetNode *graph.Node
+				minEdgeCount := 999
+				
+				// Find nation with fewest edges (underexplored)
+				g.NodesRange(func(n *graph.Node) {
+					if n.Type != graph.NodeTypeNation {
+						return
+					}
+					edgeCount := len(g.GetOutgoingEdges(n.ID)) + len(g.GetIncomingEdges(n.ID))
+					if edgeCount < minEdgeCount && edgeCount < 5 {
+						minEdgeCount = edgeCount
+						targetNode = n
+					}
+				})
+				
+				if targetNode != nil {
+					logger.Info(logger.StatusChk, "Expanding underexplored nation: %s", targetNode.Name)
+					if err := seeder.ProcessNation(g, targetNode.Name, 0); err != nil {
+						logger.Warn(logger.StatusWarn, "Failed to expand %s: %v", targetNode.Name, err)
+					}
+				}
+			}()
+		}
+	}()
+
 	// Broadcast Graph Pulse (Keep UI in sync)
 	// Only broadcast when there are actual changes
 	go func() {
@@ -139,8 +183,8 @@ func main() {
 
 			// Only broadcast if there are changes or it's been more than 30 seconds
 			if currentNodeCount != lastNodeCount ||
-			   currentEdgeCount != lastEdgeCount ||
-			   time.Since(lastBroadcast) > 30*time.Second {
+				currentEdgeCount != lastEdgeCount ||
+				time.Since(lastBroadcast) > 30*time.Second {
 
 				graphJSON, err := g.ToJSON()
 				if err != nil {
@@ -155,7 +199,7 @@ func main() {
 			}
 		}
 	}()
-	
+
 	// AutoSave (Every 5 mins)
 	go func() {
 		for range time.Tick(5 * time.Minute) {
@@ -286,11 +330,28 @@ func handleCommand(input string, g *graph.Graph, sim *simulation.Simulator, hub 
 	case "news":
 		newsEngine.FetchAndProcess()
 	case "reseed":
-		logger.Warn(logger.StatusWarn, "WARNING: This will delete all current graph data!")
-		logger.Info(logger.StatusInit, "Type 'yes' to confirm or any other key to cancel")
-		// Note: Confirmation would need to be handled via another command
-		// For now, we'll skip the interactive confirmation in TUI mode
-		logger.Warn(logger.StatusWarn, "Reseed cancelled - not supported in TUI mode. Use 'load' command instead.")
+		logger.Warn(logger.StatusWarn, "WARNING: Reseeding will clear current graph and rebuild from scratch!")
+		logger.Info(logger.StatusInit, "Starting reseed process...")
+		
+		// Clear the graph safely
+		g.Clear()
+		
+		logger.Success("Graph cleared. Starting discovery...")
+		
+		// Run seeder in background
+		go func() {
+			client := llm.NewClient()
+			seeder := discovery.NewSeeder(client)
+			if err := seeder.Seed(g); err != nil {
+				logger.Error(logger.StatusErr, "Error seeding graph: %v", err)
+			} else {
+				logger.Success("Graph reseeded successfully: %s", g.String())
+				// Save the new graph
+				if err := g.Save(graphFile); err != nil {
+					logger.Warn(logger.StatusWarn, "Failed to save reseeded graph: %v", err)
+				}
+			}
+		}()
 	case "social":
 		if len(parts) < 2 {
 			logger.Warn(logger.StatusWarn, "Usage: social <Topic>")

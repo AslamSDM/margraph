@@ -111,6 +111,8 @@ func (h *Hub) handleClientMessages(conn *websocket.Conn) {
 			h.handleGetCompanyRelations(conn, msg.Payload)
 		case "get_companies_list":
 			h.handleGetCompaniesList(conn)
+		case "get_full_graph":
+			h.handleGetFullGraph(conn)
 		default:
 			logger.Warn(logger.StatusWarn, "Unknown message type: %s", msg.Type)
 		}
@@ -194,6 +196,32 @@ func (h *Hub) handleGetCompaniesList(conn *websocket.Conn) {
 	conn.WriteJSON(BroadcastMessage{
 		Type:    "companies_list",
 		Payload: string(companiesJSON),
+	})
+}
+
+// handleGetFullGraph handles requests for the complete graph data
+func (h *Hub) handleGetFullGraph(conn *websocket.Conn) {
+	if h.graph == nil {
+		conn.WriteJSON(BroadcastMessage{
+			Type:    "error",
+			Payload: "Graph not initialized",
+		})
+		return
+	}
+
+	// Export the graph to JSON format
+	graphJSON, err := h.graph.ToJSON()
+	if err != nil {
+		conn.WriteJSON(BroadcastMessage{
+			Type:    "error",
+			Payload: "Failed to export graph",
+		})
+		return
+	}
+
+	conn.WriteJSON(BroadcastMessage{
+		Type:    "graph_update",
+		Payload: graphJSON,
 	})
 }
 

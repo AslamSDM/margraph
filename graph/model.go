@@ -164,6 +164,20 @@ func (g *Graph) AddNode(n *Node) {
 	g.triggerAutoSave()
 }
 
+// Clear removes all nodes and edges from the graph safely.
+func (g *Graph) Clear() {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	
+	g.Nodes = make(map[string]*Node)
+	g.Edges = make([]*Edge, 0)
+	g.EdgeHistories = make(map[string]*EdgeHistory)
+	g.Adjacency = make(map[string][]*Edge)
+	g.changesSinceLastSave = 0
+	
+	logger.Info(logger.StatusInit, "Graph cleared")
+}
+
 // UpdateNodeHealth safely updates a node's health score.
 func (g *Graph) UpdateNodeHealth(id string, delta float64) (float64, bool) {
 	g.mu.Lock()
@@ -380,6 +394,20 @@ func (g *Graph) GetOutgoingEdges(id string) []*Edge {
 	return nil
 }
 
+// GetIncomingEdges returns edges pointing to the given node ID.
+func (g *Graph) GetIncomingEdges(id string) []*Edge {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	
+	result := make([]*Edge, 0)
+	for _, edge := range g.Edges {
+		if edge.TargetID == id {
+			result = append(result, edge)
+		}
+	}
+	return result
+}
+
 // GetNode retrieves a node by ID.
 func (g *Graph) GetNode(id string) (*Node, bool) {
 	g.mu.RLock()
@@ -407,6 +435,19 @@ func (g *Graph) NodesRange(f func(*Node)) {
 
 	for _, n := range snapshot {
 		f(n)
+	}
+}
+
+// EdgesRange safely iterates over a copy of edges to avoid long locks.
+func (g *Graph) EdgesRange(f func(*Edge)) {
+	g.mu.RLock()
+	// Snapshot references to avoid holding lock during callback
+	snapshot := make([]*Edge, len(g.Edges))
+	copy(snapshot, g.Edges)
+	g.mu.RUnlock()
+
+	for _, e := range snapshot {
+		f(e)
 	}
 }
 
