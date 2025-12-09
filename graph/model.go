@@ -476,6 +476,12 @@ func Load(filename string) (*Graph, error) {
 		}
 	}
 
+	// Discover and add missing supply chain relationships
+	addedEdges := g.DiscoverSupplyChainRelations()
+	if addedEdges > 0 {
+		fmt.Printf("[DISCOVERY] Added %d supply chain edges from existing relationships\n", addedEdges)
+	}
+
 	return &g, nil
 }
 
@@ -562,4 +568,283 @@ func (g *Graph) StartTemporalDecayWorker(interval time.Duration, lambda float64)
 			}
 		}
 	}()
+}
+
+// CompanyRelations holds all relationships for a company
+type CompanyRelations struct {
+	CompanyID    string   `json:"company_id"`
+	CompanyName  string   `json:"company_name"`
+	Suppliers    []*Node  `json:"suppliers"`
+	Clients      []*Node  `json:"clients"`
+	RawMaterials []*Node  `json:"raw_materials"`
+	Products     []*Node  `json:"products"`
+}
+
+// GetSuppliers returns all companies that supply to the given company
+func (g *Graph) GetSuppliers(companyID string) []*Node {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+
+	suppliers := make([]*Node, 0)
+	seenIDs := make(map[string]bool)
+
+	// Find companies that have Supplies edges pointing TO this company
+	for _, edge := range g.Edges {
+		if edge.TargetID == companyID && edge.Type == EdgeTypeSupplies {
+			if supplier, ok := g.Nodes[edge.SourceID]; ok {
+				if supplier.Type == NodeTypeCorporation && !seenIDs[supplier.ID] {
+					suppliers = append(suppliers, supplier)
+					seenIDs[supplier.ID] = true
+				}
+			}
+		}
+		// Also check for ProcuresFrom edges (this company procures FROM supplier)
+		if edge.SourceID == companyID && edge.Type == EdgeTypeProcuresFrom {
+			if supplier, ok := g.Nodes[edge.TargetID]; ok {
+				if supplier.Type == NodeTypeCorporation && !seenIDs[supplier.ID] {
+					suppliers = append(suppliers, supplier)
+					seenIDs[supplier.ID] = true
+				}
+			}
+		}
+	}
+
+	return suppliers
+}
+
+// GetClients returns all companies that the given company supplies to
+func (g *Graph) GetClients(companyID string) []*Node {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+
+	clients := make([]*Node, 0)
+	seenIDs := make(map[string]bool)
+
+	// Find companies that this company has Supplies edges pointing TO
+	for _, edge := range g.Edges {
+		if edge.SourceID == companyID && edge.Type == EdgeTypeSupplies {
+			if client, ok := g.Nodes[edge.TargetID]; ok {
+				if client.Type == NodeTypeCorporation && !seenIDs[client.ID] {
+					clients = append(clients, client)
+					seenIDs[client.ID] = true
+				}
+			}
+		}
+		// Also check for ProcuresFrom edges (client procures FROM this company)
+		if edge.TargetID == companyID && edge.Type == EdgeTypeProcuresFrom {
+			if client, ok := g.Nodes[edge.SourceID]; ok {
+				if client.Type == NodeTypeCorporation && !seenIDs[client.ID] {
+					clients = append(clients, client)
+					seenIDs[client.ID] = true
+				}
+			}
+		}
+	}
+
+	return clients
+}
+
+// GetRawMaterials returns all raw materials that the given company uses
+func (g *Graph) GetRawMaterials(companyID string) []*Node {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+
+	materials := make([]*Node, 0)
+	seenIDs := make(map[string]bool)
+
+	// Find raw materials that this company Requires or Consumes
+	for _, edge := range g.Edges {
+		if edge.SourceID == companyID && (edge.Type == EdgeTypeRequires || edge.Type == EdgeTypeConsumes) {
+			if material, ok := g.Nodes[edge.TargetID]; ok {
+				if (material.Type == NodeTypeRawMaterial || material.Type == NodeTypeCrop) && !seenIDs[material.ID] {
+					materials = append(materials, material)
+					seenIDs[material.ID] = true
+				}
+			}
+		}
+	}
+
+	return materials
+}
+
+// GetProducts returns all products that the given company manufactures
+func (g *Graph) GetProducts(companyID string) []*Node {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+
+	products := make([]*Node, 0)
+	seenIDs := make(map[string]bool)
+
+	// Find products that this company Manufactures
+	for _, edge := range g.Edges {
+		if edge.SourceID == companyID && edge.Type == EdgeTypeManufactures {
+			if product, ok := g.Nodes[edge.TargetID]; ok {
+				if product.Type == NodeTypeProduct && !seenIDs[product.ID] {
+					products = append(products, product)
+					seenIDs[product.ID] = true
+				}
+			}
+		}
+	}
+
+	return products
+}
+
+// GetCompanyRelations returns all relationships for a given company
+func (g *Graph) GetCompanyRelations(companyID string) (*CompanyRelations, error) {
+	g.mu.RLock()
+	company, ok := g.Nodes[companyID]
+	g.mu.RUnlock()
+
+	if !ok {
+		return nil, fmt.Errorf("company %s not found", companyID)
+	}
+
+	if company.Type != NodeTypeCorporation {
+		return nil, fmt.Errorf("node %s is not a corporation", companyID)
+	}
+
+	return &CompanyRelations{
+		CompanyID:    companyID,
+		CompanyName:  company.Name,
+		Suppliers:    g.GetSuppliers(companyID),
+		Clients:      g.GetClients(companyID),
+		RawMaterials: g.GetRawMaterials(companyID),
+		Products:     g.GetProducts(companyID),
+	}, nil
+}
+
+// DiscoverSupplyChainRelations analyzes the graph and adds missing supplier/client edges
+// based on existing relationships and patterns
+func (g *Graph) DiscoverSupplyChainRelations() int {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	addedEdges := 0
+	existingEdges := make(map[string]bool)
+
+	// Build a map of existing edges for quick lookup
+	for _, edge := range g.Edges {
+		key := fmt.Sprintf("%s|%s|%s", edge.SourceID, edge.TargetID, edge.Type)
+		existingEdges[key] = true
+	}
+
+	// Helper function to check if edge exists
+	hasEdge := func(sourceID, targetID string, edgeType EdgeType) bool {
+		key := fmt.Sprintf("%s|%s|%s", sourceID, targetID, edgeType)
+		return existingEdges[key]
+	}
+
+	// Discover supplier/client relationships from DependsOn edges
+	for _, edge := range g.Edges {
+		if edge.Type == EdgeTypeDependsOn {
+			sourceNode, sourceExists := g.Nodes[edge.SourceID]
+			targetNode, targetExists := g.Nodes[edge.TargetID]
+
+			if !sourceExists || !targetExists {
+				continue
+			}
+
+			// If both are corporations and DependsOn exists, add Supplies edge
+			if sourceNode.Type == NodeTypeCorporation && targetNode.Type == NodeTypeCorporation {
+				// target supplies to source (source depends on target)
+				if !hasEdge(edge.TargetID, edge.SourceID, EdgeTypeSupplies) {
+					newEdge := &Edge{
+						SourceID:       edge.TargetID,
+						TargetID:       edge.SourceID,
+						Type:           EdgeTypeSupplies,
+						Weight:         edge.Weight,
+						Status:         edge.Status,
+						Directionality: DirectionalityUnidirectional,
+					}
+					g.Edges = append(g.Edges, newEdge)
+					g.Adjacency[newEdge.SourceID] = append(g.Adjacency[newEdge.SourceID], newEdge)
+
+					key := fmt.Sprintf("%s|%s|%s", newEdge.SourceID, newEdge.TargetID, newEdge.Type)
+					existingEdges[key] = true
+					addedEdges++
+				}
+
+				// Add corresponding ProcuresFrom edge
+				if !hasEdge(edge.SourceID, edge.TargetID, EdgeTypeProcuresFrom) {
+					newEdge := &Edge{
+						SourceID:       edge.SourceID,
+						TargetID:       edge.TargetID,
+						Type:           EdgeTypeProcuresFrom,
+						Weight:         edge.Weight,
+						Status:         edge.Status,
+						Directionality: DirectionalityReverse,
+					}
+					g.Edges = append(g.Edges, newEdge)
+					g.Adjacency[newEdge.SourceID] = append(g.Adjacency[newEdge.SourceID], newEdge)
+
+					key := fmt.Sprintf("%s|%s|%s", newEdge.SourceID, newEdge.TargetID, newEdge.Type)
+					existingEdges[key] = true
+					addedEdges++
+				}
+			}
+		}
+	}
+
+	// Discover supply chain relationships from Trade edges between corporations
+	for _, edge := range g.Edges {
+		if edge.Type == EdgeTypeTrade {
+			sourceNode, sourceExists := g.Nodes[edge.SourceID]
+			targetNode, targetExists := g.Nodes[edge.TargetID]
+
+			if !sourceExists || !targetExists {
+				continue
+			}
+
+			// If both are corporations with Trade relationship, infer potential supply chain
+			if sourceNode.Type == NodeTypeCorporation && targetNode.Type == NodeTypeCorporation {
+				// Check if one company requires materials that the other might supply
+				// This is a heuristic - in real scenarios, this would need more intelligence
+
+				// For now, we'll use industry/product relationships to infer supply chains
+				// This is a placeholder for more sophisticated discovery logic
+			}
+		}
+	}
+
+	// Discover manufacturing relationships
+	// If a company requires raw materials and there are products, infer manufacturing
+	companiesWithMaterials := make(map[string][]string) // company -> materials
+	companiesWithProducts := make(map[string][]string)  // company -> products
+
+	for _, edge := range g.Edges {
+		if edge.Type == EdgeTypeRequires || edge.Type == EdgeTypeConsumes {
+			sourceNode, exists := g.Nodes[edge.SourceID]
+			targetNode, targetExists := g.Nodes[edge.TargetID]
+
+			if exists && targetExists && sourceNode.Type == NodeTypeCorporation {
+				if targetNode.Type == NodeTypeRawMaterial || targetNode.Type == NodeTypeCrop {
+					companiesWithMaterials[edge.SourceID] = append(companiesWithMaterials[edge.SourceID], edge.TargetID)
+				}
+			}
+		}
+
+		if edge.Type == EdgeTypeManufactures {
+			sourceNode, exists := g.Nodes[edge.SourceID]
+			if exists && sourceNode.Type == NodeTypeCorporation {
+				companiesWithProducts[edge.SourceID] = append(companiesWithProducts[edge.SourceID], edge.TargetID)
+			}
+		}
+	}
+
+	return addedEdges
+}
+
+// GetAllCompanies returns a list of all corporations in the graph
+func (g *Graph) GetAllCompanies() []*Node {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+
+	companies := make([]*Node, 0)
+	for _, node := range g.Nodes {
+		if node.Type == NodeTypeCorporation {
+			companies = append(companies, node)
+		}
+	}
+	return companies
 }

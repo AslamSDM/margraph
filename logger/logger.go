@@ -68,10 +68,16 @@ type Logger struct {
 	level        LogLevel
 	enableColors bool
 	noColors     bool // Force disable colors (e.g., when piped)
+	tuiMode      bool // Use tview color tags instead of ANSI
 }
 
 var globalLogger *Logger
 var once sync.Once
+
+// TUIWriter is an interface for TUI logging
+type TUIWriter interface {
+	Log(message string)
+}
 
 // Init initializes the global logger
 func Init(level string, enableColors bool) {
@@ -91,6 +97,22 @@ func GetLogger() *Logger {
 		Init("info", true)
 	}
 	return globalLogger
+}
+
+// SetTUIMode enables TUI mode with tview color tags
+func SetTUIMode(enabled bool) {
+	l := GetLogger()
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.tuiMode = enabled
+}
+
+// SetOutput sets a custom output writer
+func SetOutput(w io.Writer) {
+	l := GetLogger()
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.out = w
 }
 
 // parseLevel converts string to LogLevel
@@ -115,12 +137,35 @@ func isTerminal() bool {
 	return (fileInfo.Mode() & os.ModeCharDevice) != 0
 }
 
-// colorize applies ANSI color codes if enabled
+// colorize applies ANSI color codes or tview tags if enabled
 func (l *Logger) colorize(color, text string) string {
-	if l.enableColors && !l.noColors {
-		return color + text + colorReset
+	if !l.enableColors || l.noColors {
+		return text
 	}
-	return text
+
+	if l.tuiMode {
+		// Convert ANSI colors to tview color tags
+		var tviewColor string
+		switch color {
+		case colorRed:
+			tviewColor = "red"
+		case colorGreen:
+			tviewColor = "green"
+		case colorYellow:
+			tviewColor = "yellow"
+		case colorBlue:
+			tviewColor = "blue"
+		case colorCyan:
+			tviewColor = "cyan"
+		case colorWhite:
+			tviewColor = "white"
+		default:
+			return text
+		}
+		return fmt.Sprintf("[%s]%s[-]", tviewColor, text)
+	}
+
+	return color + text + colorReset
 }
 
 // getStatusColor returns the appropriate color for a status code

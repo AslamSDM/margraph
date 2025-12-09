@@ -1,6 +1,8 @@
 package server
 
 import (
+	"encoding/json"
+	"margraf/graph"
 	"margraf/logger"
 	"net/http"
 	"sync"
@@ -23,6 +25,7 @@ type Hub struct {
 	clients   map[*websocket.Conn]bool
 	broadcast chan BroadcastMessage
 	mu        sync.Mutex
+	graph     *graph.Graph
 }
 
 func NewHub() *Hub {
@@ -30,6 +33,11 @@ func NewHub() *Hub {
 		clients:   make(map[*websocket.Conn]bool),
 		broadcast: make(chan BroadcastMessage),
 	}
+}
+
+// SetGraph sets the graph reference for the hub
+func (h *Hub) SetGraph(g *graph.Graph) {
+	h.graph = g
 }
 
 func (h *Hub) Run() {
@@ -54,6 +62,12 @@ func (h *Hub) Broadcast(msgType string, payload interface{}) {
 	}
 }
 
+// IncomingMessage represents a message from the client
+type IncomingMessage struct {
+	Type      string                 `json:"type"`
+	Payload   map[string]interface{} `json:"payload"`
+}
+
 func (h *Hub) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
@@ -67,6 +81,120 @@ func (h *Hub) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 
 	// Send initial "connected" message
 	conn.WriteJSON(BroadcastMessage{Type: "system", Payload: "Connected to Margraf Stream"})
+
+	// Start listening for incoming messages from this client
+	go h.handleClientMessages(conn)
+}
+
+// handleClientMessages listens for incoming messages from a client
+func (h *Hub) handleClientMessages(conn *websocket.Conn) {
+	defer func() {
+		h.mu.Lock()
+		delete(h.clients, conn)
+		h.mu.Unlock()
+		conn.Close()
+	}()
+
+	for {
+		var msg IncomingMessage
+		err := conn.ReadJSON(&msg)
+		if err != nil {
+			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
+				logger.Warn(logger.StatusWarn, "WS read error: %v", err)
+			}
+			break
+		}
+
+		// Handle different message types
+		switch msg.Type {
+		case "get_company_relations":
+			h.handleGetCompanyRelations(conn, msg.Payload)
+		case "get_companies_list":
+			h.handleGetCompaniesList(conn)
+		default:
+			logger.Warn(logger.StatusWarn, "Unknown message type: %s", msg.Type)
+		}
+	}
+}
+
+// handleGetCompanyRelations handles requests for company relationship data
+func (h *Hub) handleGetCompanyRelations(conn *websocket.Conn, payload map[string]interface{}) {
+	if h.graph == nil {
+		conn.WriteJSON(BroadcastMessage{
+			Type:    "error",
+			Payload: "Graph not initialized",
+		})
+		return
+	}
+
+	companyID, ok := payload["company_id"].(string)
+	if !ok {
+		conn.WriteJSON(BroadcastMessage{
+			Type:    "error",
+			Payload: "Invalid company_id",
+		})
+		return
+	}
+
+	relations, err := h.graph.GetCompanyRelations(companyID)
+	if err != nil {
+		conn.WriteJSON(BroadcastMessage{
+			Type:    "error",
+			Payload: err.Error(),
+		})
+		return
+	}
+
+	// Convert to JSON to send back
+	relationsJSON, err := json.Marshal(relations)
+	if err != nil {
+		conn.WriteJSON(BroadcastMessage{
+			Type:    "error",
+			Payload: "Failed to encode relations",
+		})
+		return
+	}
+
+	conn.WriteJSON(BroadcastMessage{
+		Type:    "company_relations",
+		Payload: string(relationsJSON),
+	})
+}
+
+// handleGetCompaniesList handles requests for the list of all companies
+func (h *Hub) handleGetCompaniesList(conn *websocket.Conn) {
+	if h.graph == nil {
+		conn.WriteJSON(BroadcastMessage{
+			Type:    "error",
+			Payload: "Graph not initialized",
+		})
+		return
+	}
+
+	companies := make([]map[string]interface{}, 0)
+
+	h.graph.NodesRange(func(n *graph.Node) {
+		if n.Type == graph.NodeTypeCorporation {
+			companies = append(companies, map[string]interface{}{
+				"id":   n.ID,
+				"name": n.Name,
+			})
+		}
+	})
+
+	companiesJSON, err := json.Marshal(companies)
+	if err != nil {
+		conn.WriteJSON(BroadcastMessage{
+			Type:    "error",
+			Payload: "Failed to encode companies",
+		})
+		return
+	}
+
+	conn.WriteJSON(BroadcastMessage{
+		Type:    "companies_list",
+		Payload: string(companiesJSON),
+	})
 }
 
 func StartServer(h *Hub, port string) {

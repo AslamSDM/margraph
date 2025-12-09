@@ -12,6 +12,7 @@ import (
 	"margraf/server"
 	"margraf/simulation"
 	"margraf/social"
+	"margraf/tui"
 	"os"
 	"strings"
 	"time"
@@ -28,8 +29,15 @@ func main() {
 	// Initialize logger with config settings
 	logger.Init(config.Global.Logging.Level, config.Global.Logging.EnableColors)
 
-	logger.Section(fmt.Sprintf("%s v%s", config.Global.App.Name, config.Global.App.Version))
-	logger.Plain("Financial Dynamic Knowledge Graph - Real-time Trade Disruption Analysis")
+	// Initialize TUI
+	tuiApp := tui.New()
+
+	// Set up logger to write to TUI
+	logger.SetOutput(tuiApp.NewWriter())
+	logger.SetTUIMode(true)
+
+	logger.Info(logger.StatusInit, "%s v%s", config.Global.App.Name, config.Global.App.Version)
+	logger.Info(logger.StatusInit, "Financial Dynamic Knowledge Graph - Real-time Trade Disruption Analysis")
 
 	// 1. Setup
 	var g *graph.Graph
@@ -60,6 +68,7 @@ func main() {
 
 	// 1b. Setup Websocket Server & Social Monitor
 	hub := server.NewHub()
+	hub.SetGraph(g) // Set graph reference for handling company relations requests
 	go hub.Run()
 	server.StartServer(hub, config.Global.Server.Port)
 
@@ -90,8 +99,7 @@ func main() {
 		}
 	}
 
-	// 3. Interactive or Demo Mode
-	reader := bufio.NewReader(os.Stdin)
+	// 3. Setup simulator
 	sim := simulation.NewSimulator(g)
 	
 	// 4. Start Engines
@@ -108,14 +116,32 @@ func main() {
 	go marketMonitor.Start(marketInterval)
 	
 	// Broadcast Graph Pulse (Keep UI in sync)
+	// Only broadcast when there are actual changes
 	go func() {
-		for range time.Tick(2 * time.Second) {
-			graphJSON, err := g.ToJSON()
-			if err != nil {
-				logger.Warn(logger.StatusWarn, "Error converting graph to JSON: %v", err)
-				continue
+		lastNodeCount := len(g.Nodes)
+		lastEdgeCount := len(g.Edges)
+		lastBroadcast := time.Now()
+
+		for range time.Tick(5 * time.Second) {
+			currentNodeCount := len(g.Nodes)
+			currentEdgeCount := len(g.Edges)
+
+			// Only broadcast if there are changes or it's been more than 30 seconds
+			if currentNodeCount != lastNodeCount ||
+			   currentEdgeCount != lastEdgeCount ||
+			   time.Since(lastBroadcast) > 30*time.Second {
+
+				graphJSON, err := g.ToJSON()
+				if err != nil {
+					logger.Warn(logger.StatusWarn, "Error converting graph to JSON: %v", err)
+					continue
+				}
+				hub.Broadcast("graph_update", graphJSON)
+
+				lastNodeCount = currentNodeCount
+				lastEdgeCount = currentEdgeCount
+				lastBroadcast = time.Now()
 			}
-			hub.Broadcast("graph_update", graphJSON)
 		}
 	}()
 	
@@ -128,153 +154,200 @@ func main() {
 		}
 	}()
 
-	for {
+	// Update TUI stats periodically
+	go func() {
+		for range time.Tick(2 * time.Second) {
+			tuiApp.UpdateStats(len(g.Nodes), len(g.Edges))
+		}
+	}()
+
+	// Process commands from TUI
+	go func() {
+		for input := range tuiApp.GetCommandChannel() {
+			handleCommand(input, g, sim, hub, newsEngine, socialMonitor, graphFile, tuiApp)
+		}
+	}()
+
+	// Run TUI (blocks until exit)
+	if err := tuiApp.Start(); err != nil {
+		logger.Error(logger.StatusErr, "TUI Error: %v", err)
+		os.Exit(1)
+	}
+}
+
+func handleCommand(input string, g *graph.Graph, sim *simulation.Simulator, hub *server.Hub, newsEngine *news.Engine, socialMon *social.SocialMonitor, graphFile string, tuiApp *tui.TUI) {
+	parts := strings.Split(strings.TrimSpace(input), " ")
+	if len(parts) == 0 {
+		return
+	}
+
+	switch parts[0] {
+	case "show":
+		printGraph(g)
+	case "edges":
+		printEdgeDirectionality()
+	case "discover":
+		logger.Info(logger.StatusInit, "Discovering supplier/client relationships...")
+		addedEdges := g.DiscoverSupplyChainRelations()
+		if addedEdges > 0 {
+			logger.Success("Added %d supply chain edges", addedEdges)
+			if err := g.Save(graphFile); err != nil {
+				logger.Error(logger.StatusErr, "Error saving graph: %v", err)
+			} else {
+				logger.Success("Graph saved to %s", graphFile)
+			}
+		} else {
+			logger.Info(logger.StatusInit, "No new relationships discovered")
+		}
+	case "companies":
+		companies := g.GetAllCompanies()
+		logger.Plain("")
+		logger.Section(fmt.Sprintf("Companies (%d)", len(companies)))
+		for _, company := range companies {
+			ticker := ""
+			if company.Ticker != "" {
+				ticker = fmt.Sprintf(" [%s]", company.Ticker)
+			}
+			logger.Plain("  [%s] %s%s - Health: %.2f", company.ID, company.Name, ticker, company.Health)
+		}
+	case "relations":
+		if len(parts) < 2 {
+			logger.Warn(logger.StatusWarn, "Usage: relations <CompanyID>")
+			return
+		}
+		companyID := parts[1]
+		relations, err := g.GetCompanyRelations(companyID)
+		if err != nil {
+			logger.Error(logger.StatusErr, "Error: %v", err)
+			return
+		}
+		printCompanyRelations(relations)
+	case "migrate":
+		migrateEdges(g, graphFile)
+	case "shock":
+		if len(parts) < 2 {
+			logger.Warn(logger.StatusWarn, "Usage: shock <NodeID> (e.g., shock india)")
+			return
+		}
+		targetID := parts[1]
+		sim.RunShock(simulation.ShockEvent{
+			TargetNodeID: targetID,
+			Description:  "Trade Ban / Supply Chain Failure",
+			ImpactFactor: 0.1, // 90% reduction
+		})
+		// Also update edge weights negatively
+		updateEdgesForTest(g, targetID, -0.8, "Negative shock simulation")
+	case "boost":
+		if len(parts) < 2 {
+			logger.Warn(logger.StatusWarn, "Usage: boost <NodeID> (e.g., boost india)")
+			return
+		}
+		targetID := parts[1]
+		sim.RunShock(simulation.ShockEvent{
+			TargetNodeID: targetID,
+			Description:  "Positive Economic Boom / Trade Agreement",
+			ImpactFactor: 1.5, // 50% increase
+		})
+		hub.Broadcast("shock_event", map[string]interface{}{
+			"type":   "boost",
+			"target": targetID,
+			"impact": 1.5,
+		})
+		// Update edge weights positively
+		updateEdgesForTest(g, targetID, 0.8, "Positive boost simulation")
+	case "simulate":
+		if len(parts) < 3 {
+			logger.Warn(logger.StatusWarn, "Usage: simulate <NodeID> <sentiment> (e.g., simulate india 0.5)")
+			return
+		}
+		targetID := parts[1]
+		sentiment := 0.0
+		fmt.Sscanf(parts[2], "%f", &sentiment)
+		if sentiment < -1.0 || sentiment > 1.0 {
+			logger.Warn(logger.StatusWarn, "Sentiment must be between -1.0 and 1.0")
+			return
+		}
+
+		// Apply to node health
+		impactFactor := 1.0 + sentiment
+		sim.RunShock(simulation.ShockEvent{
+			TargetNodeID: targetID,
+			Description:  fmt.Sprintf("Simulated news event (sentiment: %.2f)", sentiment),
+			ImpactFactor: impactFactor,
+		})
+
+		// Update edge weights
+		updateEdgesForTest(g, targetID, sentiment, fmt.Sprintf("Test simulation (%.2f)", sentiment))
+		logger.Success("Simulated news event for %s with sentiment %.2f", targetID, sentiment)
+	case "news":
+		newsEngine.FetchAndProcess()
+	case "reseed":
+		logger.Warn(logger.StatusWarn, "WARNING: This will delete all current graph data!")
+		logger.Info(logger.StatusInit, "Type 'yes' to confirm or any other key to cancel")
+		// Note: Confirmation would need to be handled via another command
+		// For now, we'll skip the interactive confirmation in TUI mode
+		logger.Warn(logger.StatusWarn, "Reseed cancelled - not supported in TUI mode. Use 'load' command instead.")
+	case "social":
+		if len(parts) < 2 {
+			logger.Warn(logger.StatusWarn, "Usage: social <Topic>")
+			return
+		}
+		topic := strings.Join(parts[1:], " ")
+		go socialMon.CrawlReal(topic)
+	case "save":
+		if len(parts) < 2 {
+			logger.Warn(logger.StatusWarn, "Usage: save <filename.json>")
+			return
+		}
+		if err := g.Save(parts[1]); err != nil {
+			logger.Error(logger.StatusErr, "Error saving graph: %v", err)
+		} else {
+			logger.Success("Graph saved to %s", parts[1])
+		}
+	case "load":
+		if len(parts) < 2 {
+			logger.Warn(logger.StatusWarn, "Usage: load <filename.json>")
+			return
+		}
+		newG, err := graph.Load(parts[1])
+		if err != nil {
+			logger.Error(logger.StatusErr, "Error loading graph: %v", err)
+		} else {
+			g.Replace(newG)
+			logger.Success("Graph loaded from %s (%s)", parts[1], g.String())
+		}
+	case "export":
+		if len(parts) < 2 {
+			logger.Warn(logger.StatusWarn, "Usage: export <filename.dot>")
+			return
+		}
+		if err := os.WriteFile(parts[1], []byte(g.ToDOT()), 0644); err != nil {
+			logger.Error(logger.StatusErr, "Error exporting DOT: %v", err)
+		} else {
+			logger.Success("Graph exported to %s", parts[1])
+		}
+	case "exit", "quit", "q":
+		logger.Info(logger.StatusOK, "Shutting down...")
+		tuiApp.Stop()
+	case "help", "?":
 		logger.Plain("")
 		logger.Section("Available Commands")
 		logger.Plain("  show          - Show all nodes and edges")
 		logger.Plain("  edges         - Show edge directionality rules")
+		logger.Plain("  discover      - Discover and add supplier/client relationships")
+		logger.Plain("  companies     - List all companies in the graph")
+		logger.Plain("  relations <ID>- Show supplier/client relations for a company")
 		logger.Plain("  shock <ID>    - Simulate a trade ban/shock on a Node ID")
 		logger.Plain("  boost <ID>    - Simulate positive news boost for a Node ID")
 		logger.Plain("  news          - Force check for latest news")
 		logger.Plain("  simulate <ID> <sentiment> - Test news impact (sentiment: -1.0 to 1.0)")
-		logger.Plain("  reseed        - Rebuild graph from scratch (WARNING: loses all data)")
 		logger.Plain("  social <T>    - Crawl real social media for Topic T")
 		logger.Plain("  save <F>      - Save graph to file F")
 		logger.Plain("  load <F>      - Load graph from file F")
 		logger.Plain("  export <F>    - Export graph to DOT file F")
 		logger.Plain("  exit          - Quit")
-		fmt.Print("> ")
-
-		input, _ := reader.ReadString('\n')
-		input = strings.TrimSpace(input)
-		parts := strings.Split(input, " ")
-
-		switch parts[0] {
-		case "show":
-			printGraph(g)
-		case "edges":
-			printEdgeDirectionality()
-		case "migrate":
-			migrateEdges(g, graphFile)
-		case "shock":
-			if len(parts) < 2 {
-				logger.Warn(logger.StatusWarn, "Usage: shock <NodeID> (e.g., shock india)")
-				continue
-			}
-			targetID := parts[1]
-			sim.RunShock(simulation.ShockEvent{
-				TargetNodeID: targetID,
-				Description:  "Trade Ban / Supply Chain Failure",
-				ImpactFactor: 0.1, // 90% reduction
-			})
-			// Also update edge weights negatively
-			updateEdgesForTest(g, targetID, -0.8, "Negative shock simulation")
-		case "boost":
-			if len(parts) < 2 {
-				logger.Warn(logger.StatusWarn, "Usage: boost <NodeID> (e.g., boost india)")
-				continue
-			}
-			targetID := parts[1]
-			sim.RunShock(simulation.ShockEvent{
-				TargetNodeID: targetID,
-				Description:  "Positive Economic Boom / Trade Agreement",
-				ImpactFactor: 1.5, // 50% increase
-			})
-			hub.Broadcast("shock_event", map[string]interface{}{
-				"type":   "boost",
-				"target": targetID,
-				"impact": 1.5,
-			})
-			// Update edge weights positively
-			updateEdgesForTest(g, targetID, 0.8, "Positive boost simulation")
-		case "simulate":
-			if len(parts) < 3 {
-				logger.Warn(logger.StatusWarn, "Usage: simulate <NodeID> <sentiment> (e.g., simulate india 0.5)")
-				continue
-			}
-			targetID := parts[1]
-			sentiment := 0.0
-			fmt.Sscanf(parts[2], "%f", &sentiment)
-			if sentiment < -1.0 || sentiment > 1.0 {
-				logger.Warn(logger.StatusWarn, "Sentiment must be between -1.0 and 1.0")
-				continue
-			}
-
-			// Apply to node health
-			impactFactor := 1.0 + sentiment
-			sim.RunShock(simulation.ShockEvent{
-				TargetNodeID: targetID,
-				Description:  fmt.Sprintf("Simulated news event (sentiment: %.2f)", sentiment),
-				ImpactFactor: impactFactor,
-			})
-
-			// Update edge weights
-			updateEdgesForTest(g, targetID, sentiment, fmt.Sprintf("Test simulation (%.2f)", sentiment))
-			logger.Success("Simulated news event for %s with sentiment %.2f", targetID, sentiment)
-		case "news":
-			newsEngine.FetchAndProcess()
-		case "reseed":
-			logger.Warn(logger.StatusWarn, "WARNING: This will delete all current graph data!")
-			fmt.Print("Are you sure? (yes/no): ")
-			confirm, _ := reader.ReadString('\n')
-			confirm = strings.TrimSpace(strings.ToLower(confirm))
-			if confirm == "yes" {
-				logger.Info(logger.StatusInit, "Clearing graph and reseeding...")
-				g = graph.NewGraph()
-				g.EnableAutoSave(graphFile, 10)
-				if err := seeder.Seed(g); err != nil {
-					logger.Error(logger.StatusErr, "Error seeding graph: %v", err)
-				} else {
-					logger.Success("Graph rebuilt: %s", g.String())
-				}
-			} else {
-				logger.Info(logger.StatusInit, "Reseed cancelled")
-			}
-		case "social":
-			if len(parts) < 2 {
-				logger.Warn(logger.StatusWarn, "Usage: social <Topic>")
-				continue
-			}
-			topic := strings.Join(parts[1:], " ")
-			go socialMonitor.CrawlReal(topic)
-		case "save":
-			if len(parts) < 2 {
-				logger.Warn(logger.StatusWarn, "Usage: save <filename.json>")
-				continue
-			}
-			if err := g.Save(parts[1]); err != nil {
-				logger.Error(logger.StatusErr, "Error saving graph: %v", err)
-			} else {
-				logger.Success("Graph saved to %s", parts[1])
-			}
-		case "load":
-			if len(parts) < 2 {
-				logger.Warn(logger.StatusWarn, "Usage: load <filename.json>")
-				continue
-			}
-			newG, err := graph.Load(parts[1])
-			if err != nil {
-				logger.Error(logger.StatusErr, "Error loading graph: %v", err)
-			} else {
-				g.Replace(newG)
-				logger.Success("Graph loaded from %s (%s)", parts[1], g.String())
-			}
-		case "export":
-			if len(parts) < 2 {
-				logger.Warn(logger.StatusWarn, "Usage: export <filename.dot>")
-				continue
-			}
-			if err := os.WriteFile(parts[1], []byte(g.ToDOT()), 0644); err != nil {
-				logger.Error(logger.StatusErr, "Error exporting DOT: %v", err)
-			} else {
-				logger.Success("Graph exported to %s", parts[1])
-			}
-		case "exit":
-			logger.Plain("Goodbye.")
-			return
-		default:
-			logger.Warn(logger.StatusWarn, "Unknown command")
-		}
+	default:
+		logger.Warn(logger.StatusWarn, "Unknown command: %s (type 'help' for commands)", parts[0])
 	}
 }
 
@@ -434,5 +507,63 @@ func updateEdgesForTest(g *graph.Graph, nodeID string, sentiment float64, reason
 		logger.Success("Updated %d edge weights for node %s (%s)", updatedCount, nodeID, reason)
 	} else {
 		logger.Warn(logger.StatusWarn, "No edges found for node %s", nodeID)
+	}
+}
+
+// printCompanyRelations prints detailed company relationships
+func printCompanyRelations(relations *graph.CompanyRelations) {
+	logger.Plain("")
+	logger.Section(fmt.Sprintf("Company: %s [%s]", relations.CompanyName, relations.CompanyID))
+	logger.Plain("")
+
+	// Suppliers
+	logger.Plain("Suppliers (%d):", len(relations.Suppliers))
+	if len(relations.Suppliers) > 0 {
+		for _, supplier := range relations.Suppliers {
+			ticker := ""
+			if supplier.Ticker != "" {
+				ticker = fmt.Sprintf(" [%s]", supplier.Ticker)
+			}
+			logger.Plain("  • %s%s - Health: %.2f", supplier.Name, ticker, supplier.Health)
+		}
+	} else {
+		logger.Plain("  (none)")
+	}
+	logger.Plain("")
+
+	// Clients
+	logger.Plain("Clients (%d):", len(relations.Clients))
+	if len(relations.Clients) > 0 {
+		for _, client := range relations.Clients {
+			ticker := ""
+			if client.Ticker != "" {
+				ticker = fmt.Sprintf(" [%s]", client.Ticker)
+			}
+			logger.Plain("  • %s%s - Health: %.2f", client.Name, ticker, client.Health)
+		}
+	} else {
+		logger.Plain("  (none)")
+	}
+	logger.Plain("")
+
+	// Raw Materials
+	logger.Plain("Raw Materials (%d):", len(relations.RawMaterials))
+	if len(relations.RawMaterials) > 0 {
+		for _, material := range relations.RawMaterials {
+			logger.Plain("  • %s (%s) - Health: %.2f", material.Name, material.Type, material.Health)
+		}
+	} else {
+		logger.Plain("  (none)")
+	}
+	logger.Plain("")
+
+	// Products
+	logger.Plain("Products (%d):", len(relations.Products))
+	if len(relations.Products) > 0 {
+		for _, product := range relations.Products {
+			logger.Plain("  • %s - Health: %.2f", product.Name, product.Health)
+		}
+	} else {
+		logger.Plain("  (none)")
 	}
 }
